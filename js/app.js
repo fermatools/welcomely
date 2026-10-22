@@ -1,5 +1,5 @@
-import { getToken } from './api.js';
-import { clearSession, go, homeFor, loadMe, saveRedirect, state } from './state.js';
+import { DEMO, store } from './api.js';
+import { go, homeFor, loadMe, saveRedirect, state } from './state.js';
 import { esc, icon, spinner, toast } from './ui.js';
 import * as agenda from './views/agenda.js';
 import * as auth from './views/auth.js';
@@ -22,7 +22,7 @@ const ROUTES = [
   [/^\/entrar$/, auth.login, { public: true, bare: true }],
   [/^\/cadastro$/, auth.register, { public: true, bare: true }],
   [/^\/sobre$/, conta.about, { public: true }],
-  [/^\/p\/(\d+)$/, cliente.professionalPage, { public: true }],
+  [/^\/p\/([\w-]+)$/, cliente.professionalPage, { public: true }],
   [/^\/buscar$/, cliente.search, {}],
   [/^\/meus$/, cliente.mine, {}],
   [/^\/agenda$/, agenda.agenda, { roles: MANAGERS }],
@@ -34,15 +34,18 @@ const ROUTES = [
 
 const root = document.getElementById('app');
 
+const demoBanner = () => (DEMO ? `<div class="demo-banner">Modo demonstração: os dados ficam só neste navegador.
+  <a href="#/sobre">Saiba mais</a></div>` : '');
+
 function layout(path, bare) {
   if (bare) {
-    root.innerHTML = '<main id="view" class="bare"></main>';
+    root.innerHTML = `${demoBanner()}<main id="view" class="bare"></main>`;
     return root.querySelector('#view');
   }
   const items = state.user ? NAV[state.user.role] : [];
   const links = (cls) => items.map(([href, label, ic]) => `
     <a href="${href}" class="${cls}${path === href.slice(1) ? ' active' : ''}">${icon(ic)}<span>${label}</span></a>`).join('');
-  root.innerHTML = `
+  root.innerHTML = `${demoBanner()}
     <header class="topbar">
       <a class="brand" href="${homeFor(state.user)}"><img src="icons/icon.svg" alt="" width="30" height="30"><span>Welcomely</span></a>
       <nav class="topnav">${links('topnav-link')}</nav>
@@ -80,17 +83,11 @@ async function render() {
 }
 
 window.addEventListener('hashchange', render);
-window.addEventListener('welcomely:logout', () => {
-  clearSession();
-  toast('Sua sessão expirou. Entre novamente.', 'error');
-  go('#/entrar');
-});
 
 async function start() {
-  if (getToken()) {
-    try { await loadMe(); } catch (err) {
-      if (err.status !== 401) toast(err.message, 'error');
-    }
+  await store.ready();   // o Firebase restaura a sessão de forma assíncrona
+  if (store.uid()) {
+    try { await loadMe(); } catch (err) { toast(err.message, 'error'); }
   }
   render();
 }

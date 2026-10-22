@@ -1,4 +1,4 @@
-import { api } from '../api.js';
+import * as api from '../api.js';
 import { canManage, go, saveRedirect, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, fmtRelativeDay, icon, nowStamp, parseDate,
@@ -33,7 +33,7 @@ export async function search(el) {
   const load = async () => {
     const mine = ++seq;
     try {
-      const { professionals } = await api(`/professionals?q=${encodeURIComponent(input.value.trim())}`);
+      const professionals = await api.listProfessionals(input.value);
       if (mine !== seq) return;
       results.innerHTML = professionals.length ? professionals.map(profCard).join('')
         : empty('Nenhum profissional encontrado.', 'search');
@@ -44,7 +44,7 @@ export async function search(el) {
 }
 
 export async function professionalPage(el, id) {
-  const { professional: p, services } = await api(`/professionals/${id}`);
+  const { professional: p, services } = await api.getProfessional(id);
   const manager = canManage(id);
   const lastDay = addDays(today(), p.max_days_ahead);
   const sel = { service: services[0]?.id ?? null, date: today(), time: null };
@@ -113,7 +113,7 @@ export async function professionalPage(el, id) {
 
   const renderSummary = () => {
     const service = services.find((s) => s.id === sel.service);
-    el.querySelectorAll('[data-service]').forEach((b) => b.classList.toggle('active', Number(b.dataset.service) === sel.service));
+    el.querySelectorAll('[data-service]').forEach((b) => b.classList.toggle('active', b.dataset.service === sel.service));
     el.querySelector('#summary').innerHTML = sel.time
       ? `${icon('calendar')} <span><b>${esc(service.name)}</b> · ${fmtDay(sel.date)} às <b>${sel.time}</b></span>` : '';
     bookBtn.disabled = !sel.time;
@@ -127,7 +127,7 @@ export async function professionalPage(el, id) {
     renderSummary();
     slotsEl.innerHTML = spinner();
     try {
-      const { slots } = await api(`/professionals/${id}/slots?date=${sel.date}&service_id=${sel.service}`);
+      const slots = await api.slots(id, sel.service, sel.date);
       if (mine !== seq) return;
       slotsEl.innerHTML = slots.length
         ? slots.map((t) => `<button type="button" class="slot" data-time="${t}">${t}</button>`).join('')
@@ -138,7 +138,7 @@ export async function professionalPage(el, id) {
   el.querySelector('#services').addEventListener('click', (e) => {
     const b = e.target.closest('[data-service]');
     if (!b) return;
-    sel.service = Number(b.dataset.service);
+    sel.service = b.dataset.service;
     loadSlots();
   });
   daysEl.addEventListener('click', (e) => {
@@ -169,9 +169,8 @@ export async function professionalPage(el, id) {
     }
     busy(bookBtn, async () => {
       try {
-        const { appointment } = await api('/appointments', {
-          method: 'POST',
-          body: { professional_id: Number(id), service_id: sel.service, date: sel.date, time: sel.time, notes: el.querySelector('#notes').value },
+        const appointment = await api.createAppointment({
+          professional_id: id, service_id: sel.service, date: sel.date, time: sel.time, notes: el.querySelector('#notes').value,
         });
         toast(appointment.status === 'pendente' ? 'Pedido enviado! Aguarde a confirmação.' : 'Agendamento confirmado!');
         go('#/meus');
@@ -202,7 +201,7 @@ function apptCard(a, actions) {
 
 export async function mine(el) {
   el.innerHTML = `<div class="page">${spinner()}</div>`;
-  const { appointments } = await api('/appointments/mine');
+  const appointments = await api.myAppointments();
   const now = nowStamp();
   const upcoming = appointments.filter((a) => a.ends_at >= now && ['pendente', 'confirmado'].includes(a.status)).reverse();
   const past = appointments.filter((a) => !upcoming.includes(a));
@@ -225,7 +224,7 @@ export async function mine(el) {
     if (!b) return;
     if (!await confirmDialog('Cancelar este agendamento?', { okLabel: 'Cancelar agendamento', danger: true })) return;
     busy(b, async () => {
-      await api(`/appointments/${b.dataset.cancel}`, { method: 'PATCH', body: { status: 'cancelado' } });
+      await api.updateAppointment(b.dataset.cancel, { status: 'cancelado' });
       toast('Agendamento cancelado.');
       mine(el);
     });

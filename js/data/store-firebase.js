@@ -1,0 +1,94 @@
+// Armazenamento real: Firebase Auth (e-mail/senha) + Firestore.
+// Mesma interface de store-demo.js; a lógica do app fica em data/api.js.
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  createUserWithEmailAndPassword, EmailAuthProvider, getAuth, onAuthStateChanged, reauthenticateWithCredential,
+  sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updatePassword,
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import {
+  collection, deleteDoc, doc, getDoc, getDocs, getFirestore, limit, query, runTransaction, setDoc, updateDoc, where,
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'E-mail ou senha incorretos.',
+  'auth/wrong-password': 'E-mail ou senha incorretos.',
+  'auth/user-not-found': 'E-mail ou senha incorretos.',
+  'auth/invalid-email': 'E-mail inválido.',
+  'auth/email-already-in-use': 'Já existe uma conta com este e-mail.',
+  'auth/weak-password': 'A senha deve ter pelo menos 6 caracteres.',
+  'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente de novo.',
+  'auth/network-request-failed': 'Sem conexão. Verifique sua internet.',
+  'permission-denied': 'Sem permissão para esta operação.',
+  unavailable: 'Sem conexão com o servidor. Verifique sua internet.',
+};
+
+function friendly(err) {
+  const msg = AUTH_ERRORS[err?.code];
+  if (!msg) return err;
+  const e = new Error(msg);
+  e.code = err.code;
+  return e;
+}
+
+const wrap = (fn) => async (...args) => {
+  try { return await fn(...args); } catch (err) { throw friendly(err); }
+};
+
+export function createFirebaseStore(config) {
+  const app = initializeApp(config);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const ref = (path) => doc(db, path);
+  const snapData = (s) => (s.exists() ? { id: s.id, ...s.data() } : null);
+
+  let resolveReady;
+  const readyPromise = new Promise((r) => { resolveReady = r; });
+  const listeners = new Set();
+  onAuthStateChanged(auth, (user) => {
+    resolveReady();
+    listeners.forEach((fn) => fn(user?.uid ?? null));
+  });
+
+  function makeQuery(colPath, filters = [], max = null) {
+    const parts = filters.map(([f, op, v]) => where(f, op, v));
+    if (max) parts.push(limit(max));
+    return query(collection(db, colPath), ...parts);
+  }
+
+  return {
+    demo: false,
+    ready: () => readyPromise,
+    onAuthChange: (fn) => listeners.add(fn),
+    uid: () => auth.currentUser?.uid ?? null,
+    email: () => auth.currentUser?.email ?? null,
+    emailVerified: () => Boolean(auth.currentUser?.emailVerified),
+
+    signUp: wrap(async (email, password) => {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      sendEmailVerification(cred.user).catch(() => {});
+      return cred.user.uid;
+    }),
+    signIn: wrap(async (email, password) => { await signInWithEmailAndPassword(auth, email, password); }),
+    signOut: wrap(() => signOut(auth)),
+    resetPassword: wrap((email) => sendPasswordResetEmail(auth, email)),
+    changePassword: wrap(async (current, next) => {
+      const user = auth.currentUser;
+      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, current));
+      await updatePassword(user, next);
+    }),
+
+    newId: (colPath) => doc(collection(db, colPath)).id,
+    get: wrap(async (path) => snapData(await getDoc(ref(path)))),
+    list: wrap(async (colPath, filters, max) => (await getDocs(makeQuery(colPath, filters, max))).docs.map(snapData)),
+    set: wrap((path, data, merge = false) => setDoc(ref(path), data, { merge })),
+    update: wrap((path, data) => updateDoc(ref(path), data)),
+    remove: wrap((path) => deleteDoc(ref(path))),
+    // Transação: leituras primeiro (t.get), depois escritas (t.set/t.update/t.remove).
+    tx: wrap((fn) => runTransaction(db, async (t) => fn({
+      get: async (path) => snapData(await t.get(ref(path))),
+      set: (path, data, merge = false) => { t.set(ref(path), data, { merge }); },
+      update: (path, data) => { t.update(ref(path), data); },
+      remove: (path) => { t.delete(ref(path)); },
+    }))),
+  };
+}

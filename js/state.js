@@ -1,4 +1,4 @@
-import { api, setToken } from './api.js';
+import * as api from './api.js';
 
 const PID_KEY = 'welcomely.pid';
 const REDIRECT_KEY = 'welcomely.redirect';
@@ -7,18 +7,18 @@ const REDIRECT_KEY = 'welcomely.redirect';
 export const state = { user: null, manages: [], profile: null };
 
 export async function loadMe() {
-  const data = await api('/me');
+  const data = await api.me();
   state.user = data.user;
-  state.manages = data.manages || [];
-  state.profile = data.profile || null;
+  state.manages = data.manages;
+  state.profile = data.profile;
   return state;
 }
 
-export function clearSession() {
-  setToken(null);
+export async function clearSession() {
   state.user = null;
   state.manages = [];
   state.profile = null;
+  await api.logout().catch(() => {});
 }
 
 export function homeFor(user) {
@@ -35,16 +35,16 @@ export function go(hash) {
 export function currentPid() {
   const ids = state.manages.map((p) => p.id);
   let saved = null;
-  try { saved = Number(localStorage.getItem(PID_KEY)); } catch { /* ignora */ }
+  try { saved = localStorage.getItem(PID_KEY); } catch { /* ignora */ }
   return ids.includes(saved) ? saved : ids[0] ?? null;
 }
 
 export function setPid(id) {
-  try { localStorage.setItem(PID_KEY, String(id)); } catch { /* ignora */ }
+  try { localStorage.setItem(PID_KEY, id); } catch { /* ignora */ }
 }
 
 export function canManage(pid) {
-  return state.manages.some((p) => p.id === Number(pid));
+  return state.manages.some((p) => p.id === pid);
 }
 
 export function saveRedirect(hash) {

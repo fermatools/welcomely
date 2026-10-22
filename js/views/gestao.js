@@ -1,4 +1,4 @@
-import { api } from '../api.js';
+import * as api from '../api.js';
 import { currentPid, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, spinner, timeOf, toast,
@@ -12,7 +12,7 @@ export async function services(el) {
   const pid = currentPid();
   if (!pid) return noProfessional(el);
   el.innerHTML = `<div class="page">${spinner()}</div>`;
-  const { services: list } = await api(`/professionals/${pid}/services`);
+  const list = await api.listServices(pid);
   el.innerHTML = `
     <div class="page">
       <div class="page-head"><h1>Serviços</h1>${profPicker(pid)}
@@ -34,12 +34,12 @@ export async function services(el) {
   el.querySelector('#new').addEventListener('click', () => serviceForm(pid, null, rerender));
   el.querySelector('.page').addEventListener('click', async (e) => {
     const edit = e.target.closest('[data-edit]');
-    if (edit) serviceForm(pid, list.find((s) => s.id === Number(edit.dataset.edit)), rerender);
+    if (edit) serviceForm(pid, list.find((s) => s.id === edit.dataset.edit), rerender);
     const del = e.target.closest('[data-del]');
     if (del && await confirmDialog('Excluir este serviço? Se já houver agendamentos com ele, será apenas desativado.',
       { okLabel: 'Excluir', danger: true })) {
       busy(del, async () => {
-        const res = await api(`/services/${del.dataset.del}`, { method: 'DELETE' });
+        const res = await api.deleteService(pid, del.dataset.del);
         toast(res.deactivated ? 'Serviço desativado (há agendamentos com ele).' : 'Serviço excluído.');
         rerender();
       });
@@ -59,8 +59,7 @@ function serviceForm(pid, s, onDone) {
       <label class="check"><input type="checkbox" name="active"${!s || s.active ? ' checked' : ''}> Disponível para agendamento</label>`,
     onSubmit: async (form) => {
       const data = formData(form);
-      if (s) await api(`/services/${s.id}`, { method: 'PUT', body: data });
-      else await api(`/professionals/${pid}/services`, { method: 'POST', body: data });
+      await api.saveService(pid, s?.id, data);
       toast('Serviço salvo.');
       onDone();
       return true;
@@ -74,8 +73,7 @@ export async function hours(el) {
   const pid = currentPid();
   if (!pid) return noProfessional(el);
   el.innerHTML = `<div class="page">${spinner()}</div>`;
-  const [{ rules }, { blocks }] = await Promise.all([
-    api(`/professionals/${pid}/availability`), api(`/professionals/${pid}/blocks`)]);
+  const [rules, blocks] = await Promise.all([api.getAvailability(pid), api.listBlocks(pid)]);
   const week = WEEKDAYS.map((_, wd) => rules.filter((r) => r.weekday === wd).map((r) => ({ ...r })));
 
   el.innerHTML = `
@@ -140,7 +138,7 @@ export async function hours(el) {
   });
   el.querySelector('#save-week').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     const payload = week.flatMap((list, wd) => list.map((r) => ({ weekday: wd, start_time: r.start_time, end_time: r.end_time })));
-    await api(`/professionals/${pid}/availability`, { method: 'PUT', body: { rules: payload } });
+    await api.setAvailability(pid, payload);
     toast('Horários salvos.');
   }));
   el.querySelector('#new-block').addEventListener('click', () => blockForm(pid, rerender));
@@ -148,7 +146,7 @@ export async function hours(el) {
     const del = e.target.closest('[data-del-block]');
     if (!del || !await confirmDialog('Remover este bloqueio?', { okLabel: 'Remover', danger: true })) return;
     busy(del, async () => {
-      await api(`/blocks/${del.dataset.delBlock}`, { method: 'DELETE' });
+      await api.deleteBlock(pid, del.dataset.delBlock);
       toast('Bloqueio removido.');
       rerender();
     });
@@ -192,7 +190,7 @@ function blockForm(pid, onDone) {
       const body = d.all_day
         ? { starts_at: `${d.start_date}T00:00`, ends_at: `${addDays(d.end_date, 1)}T00:00`, reason: d.reason }
         : { starts_at: `${d.start_date}T${d.start_time}`, ends_at: `${d.end_date}T${d.end_time}`, reason: d.reason };
-      const res = await api(`/professionals/${pid}/blocks`, { method: 'POST', body });
+      const res = await api.createBlock(pid, body);
       toast(res.conflicting_appointments
         ? `Período bloqueado. Atenção: ${res.conflicting_appointments} agendamento(s) já marcados nele continuam na agenda.`
         : 'Período bloqueado.', res.conflicting_appointments ? 'error' : 'ok');
@@ -213,7 +211,7 @@ function blockForm(pid, onDone) {
 export async function team(el) {
   const pid = state.user.id;
   el.innerHTML = `<div class="page">${spinner()}</div>`;
-  const { assistants } = await api(`/professionals/${pid}/assistants`);
+  const assistants = await api.listAssistants(pid);
   el.innerHTML = `
     <div class="page narrow">
       <h1>Equipe</h1>
@@ -235,7 +233,7 @@ export async function team(el) {
     e.preventDefault();
     if (!form.reportValidity()) return;
     busy(form.querySelector('[type=submit]'), async () => {
-      await api(`/professionals/${pid}/assistants`, { method: 'POST', body: formData(form) });
+      await api.addAssistant(pid, form.elements.email.value);
       toast('Auxiliar adicionado.');
       team(el);
     });
@@ -244,7 +242,7 @@ export async function team(el) {
     const rm = e.target.closest('[data-rm]');
     if (!rm || !await confirmDialog('Remover este auxiliar da equipe?', { okLabel: 'Remover', danger: true })) return;
     busy(rm, async () => {
-      await api(`/professionals/${pid}/assistants/${rm.dataset.rm}`, { method: 'DELETE' });
+      await api.removeAssistant(pid, rm.dataset.rm);
       toast('Auxiliar removido.');
       team(el);
     });

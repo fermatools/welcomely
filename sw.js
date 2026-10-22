@@ -1,9 +1,10 @@
 // Service worker: guarda os arquivos do app para abrir rápido e funcionar com rede instável.
-// A API (/api/) sempre vai à rede. Ao mudar arquivos do app, incremente VERSION.
-const VERSION = 'welcomely-v1';
+// O Firebase (outro domínio) não passa por aqui. Ao mudar arquivos do app, incremente VERSION.
+const VERSION = 'welcomely-v2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
-  'js/app.js', 'js/api.js', 'js/config.js', 'js/state.js', 'js/ui.js',
+  'js/app.js', 'js/api.js', 'js/config.js', 'js/firebase-config.js', 'js/state.js', 'js/ui.js',
+  'js/data/logic.js', 'js/data/store-demo.js', 'js/data/store-firebase.js',
   'js/views/auth.js', 'js/views/cliente.js', 'js/views/agenda.js', 'js/views/gestao.js', 'js/views/conta.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
@@ -23,9 +24,10 @@ self.addEventListener('activate', (event) => {
 // Rede primeiro (para sempre pegar a versão nova); cache quando estiver sem conexão.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== location.origin || url.pathname.includes('/api/')) return;
+  if (event.request.method !== 'GET' || url.origin !== location.origin) return;
   event.respondWith(
-    fetch(event.request)
+    // no-cache: revalida com o servidor (o GitHub Pages manda cache de 10 min)
+    fetch(event.request, { cache: 'no-cache' })
       .then((response) => {
         if (response.ok) {
           const copy = response.clone();
