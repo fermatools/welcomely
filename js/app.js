@@ -1,0 +1,102 @@
+import { getToken } from './api.js';
+import { clearSession, go, homeFor, loadMe, saveRedirect, state } from './state.js';
+import { esc, icon, spinner, toast } from './ui.js';
+import * as agenda from './views/agenda.js';
+import * as auth from './views/auth.js';
+import * as cliente from './views/cliente.js';
+import * as conta from './views/conta.js';
+import * as gestao from './views/gestao.js';
+
+const MANAGERS = ['profissional', 'auxiliar'];
+
+const NAV = {
+  cliente: [['#/buscar', 'Buscar', 'search'], ['#/meus', 'Agendamentos', 'calendar'], ['#/conta', 'Conta', 'user']],
+  profissional: [['#/agenda', 'Agenda', 'calendar'], ['#/servicos', 'Serviços', 'list'], ['#/horarios', 'Horários', 'clock'],
+    ['#/equipe', 'Equipe', 'users'], ['#/conta', 'Conta', 'user']],
+  auxiliar: [['#/agenda', 'Agenda', 'calendar'], ['#/servicos', 'Serviços', 'list'], ['#/horarios', 'Horários', 'clock'],
+    ['#/conta', 'Conta', 'user']],
+};
+
+// [padrão, view, opções]. public: abre sem login; roles: perfis que podem abrir.
+const ROUTES = [
+  [/^\/entrar$/, auth.login, { public: true, bare: true }],
+  [/^\/cadastro$/, auth.register, { public: true, bare: true }],
+  [/^\/sobre$/, conta.about, { public: true }],
+  [/^\/p\/(\d+)$/, cliente.professionalPage, { public: true }],
+  [/^\/buscar$/, cliente.search, {}],
+  [/^\/meus$/, cliente.mine, {}],
+  [/^\/agenda$/, agenda.agenda, { roles: MANAGERS }],
+  [/^\/servicos$/, gestao.services, { roles: MANAGERS }],
+  [/^\/horarios$/, gestao.hours, { roles: MANAGERS }],
+  [/^\/equipe$/, gestao.team, { roles: ['profissional'] }],
+  [/^\/conta$/, conta.account, {}],
+];
+
+const root = document.getElementById('app');
+
+function layout(path, bare) {
+  if (bare) {
+    root.innerHTML = '<main id="view" class="bare"></main>';
+    return root.querySelector('#view');
+  }
+  const items = state.user ? NAV[state.user.role] : [];
+  const links = (cls) => items.map(([href, label, ic]) => `
+    <a href="${href}" class="${cls}${path === href.slice(1) ? ' active' : ''}">${icon(ic)}<span>${label}</span></a>`).join('');
+  root.innerHTML = `
+    <header class="topbar">
+      <a class="brand" href="${homeFor(state.user)}"><img src="icons/icon.svg" alt="" width="30" height="30"><span>Welcomely</span></a>
+      <nav class="topnav">${links('topnav-link')}</nav>
+      ${state.user ? `<span class="who" title="${esc(state.user.email)}">${esc(state.user.name.split(' ')[0])}</span>`
+        : '<a class="btn small primary" href="#/entrar">Entrar</a>'}
+    </header>
+    <main id="view">${spinner()}</main>
+    ${items.length ? `<nav class="bottomnav">${links('bottomnav-link')}</nav>` : ''}`;
+  return root.querySelector('#view');
+}
+
+async function render() {
+  const path = location.hash.replace(/^#/, '') || '/';
+  if (path === '/') return go(homeFor(state.user));
+
+  for (const [pattern, view, opts] of ROUTES) {
+    const match = path.match(pattern);
+    if (!match) continue;
+    if (!opts.public && !state.user) {
+      saveRedirect(location.hash);
+      return go('#/entrar');
+    }
+    if (opts.roles && !opts.roles.includes(state.user.role)) return go(homeFor(state.user));
+    if (opts.bare && state.user) return go(homeFor(state.user));
+    const el = layout(path, opts.bare);
+    window.scrollTo(0, 0);
+    try {
+      await view(el, ...match.slice(1));
+    } catch (err) {
+      el.innerHTML = `<div class="page"><div class="card error-box">${esc(err.message)}</div></div>`;
+    }
+    return undefined;
+  }
+  return go(homeFor(state.user));
+}
+
+window.addEventListener('hashchange', render);
+window.addEventListener('welcomely:logout', () => {
+  clearSession();
+  toast('Sua sessão expirou. Entre novamente.', 'error');
+  go('#/entrar');
+});
+
+async function start() {
+  if (getToken()) {
+    try { await loadMe(); } catch (err) {
+      if (err.status !== 401) toast(err.message, 'error');
+    }
+  }
+  render();
+}
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+start();
