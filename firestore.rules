@@ -1,0 +1,139 @@
+rules_version = '2';
+
+// Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
+// Sempre que este arquivo mudar, é preciso publicar de novo no console.
+//
+// Quem pode o quê:
+//   - Perfis de profissionais, serviços, bloqueios e horários ocupados (sem dados pessoais): leitura pública.
+//   - Agendamentos: só o profissional, seus auxiliares e o próprio cliente.
+//   - Cliente: cria agendamento para si (pendente/confirmado conforme o profissional) e pode cancelá-lo.
+//   - Profissional: tudo na própria agenda e equipe. Auxiliar: agenda, serviços, horários e bloqueios.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function profDoc(pid) { return /databases/$(database)/documents/professionals/$(pid); }
+    function apptDoc(id) { return /databases/$(database)/documents/appointments/$(id); }
+
+    // "After": vale também quando o documento do profissional é criado na mesma transação (cadastro).
+    function isOwner(pid) { return signedIn() && me() == pid && existsAfter(profDoc(pid)); }
+    function isManager(pid) {
+      return signedIn() && existsAfter(profDoc(pid))
+        && (me() == pid || me() in getAfter(profDoc(pid)).data.assistants);
+    }
+
+    function verifiedEmail() { return signedIn() && request.auth.token.email_verified == true; }
+    // O cliente do agendamento: pela conta ou pelo e-mail (confirmado) informado pela secretaria.
+    function ownsAppt(a) {
+      return signedIn() && (a.client_id == me()
+        || (verifiedEmail() && a.client_email != '' && a.client_email == request.auth.token.email));
+    }
+
+    // ---------------------------------------------------------------- contas
+    match /users/{userId} {
+      allow read: if signedIn() && me() == userId;
+      allow create: if signedIn() && me() == userId
+        && request.resource.data.role in ['profissional', 'cliente', 'auxiliar']
+        && request.resource.data.email == request.auth.token.email;
+      allow update: if signedIn() && me() == userId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == resource.data.email;
+    }
+
+    // Busca de conta pelo e-mail (só leitura direta, nunca listagem).
+    match /usersByEmail/{email} {
+      allow get: if signedIn();
+      allow create: if signedIn() && email == request.auth.token.email
+        && request.resource.data.uid == me()
+        && request.resource.data.role == getAfter(/databases/$(database)/documents/users/$(me())).data.role;
+      allow update: if signedIn() && resource.data.uid == me()
+        && request.resource.data.uid == me() && request.resource.data.role == resource.data.role;
+    }
+
+    // ---------------------------------------------------------- profissionais
+    match /professionals/{pid} {
+      allow read: if true;
+      allow create: if signedIn() && me() == pid
+        && getAfter(/databases/$(database)/documents/users/$(pid)).data.role == 'profissional'
+        && request.resource.data.assistants.size() == 0;
+      // O profissional altera tudo; o auxiliar só a grade semanal.
+      allow update: if signedIn() && (me() == pid
+        || (me() in resource.data.assistants
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability'])));
+
+      match /services/{sid} {
+        allow read: if true;
+        allow write: if isManager(pid);
+      }
+
+      match /blocks/{bid} {
+        allow read: if true;
+        allow write: if isManager(pid);
+      }
+
+      match /team/{aid} {
+        allow read: if isManager(pid);
+        allow write: if isOwner(pid);
+      }
+
+      match /clients/{cid} {
+        allow read: if isManager(pid);
+        allow write: if isManager(pid) || (signedIn() && cid == 'u_' + me());
+      }
+
+      // Horários ocupados do dia: [{id, s, e, c}] (c = uid do cliente ou null). Sem nomes.
+      match /days/{day} {
+        allow read: if true;
+        allow write: if isManager(pid) || clientDayChange(pid);
+      }
+    }
+
+    // Um cliente só acrescenta a própria reserva (criada na mesma transação) ou retira a que cancelou.
+    function clientDayChange(pid) {
+      let before = resource == null ? [] : resource.data.busy;
+      let after = request.resource.data.busy;
+      let added = after.removeAll(before);
+      let removed = before.removeAll(after);
+      return signedIn() && request.resource.data.keys().hasOnly(['busy'])
+        && added.size() + removed.size() == 1
+        && (added.size() == 0 || addedOk(pid, added[0]))
+        && (removed.size() == 0 || removedOk(pid, removed[0]));
+    }
+    function addedOk(pid, e) {
+      let a = getAfter(apptDoc(e.id)).data;
+      return e.c == me() && a.client_id == me() && a.professional_id == pid
+        && a.start == e.s && a.end == e.e && a.status in ['pendente', 'confirmado'];
+    }
+    function removedOk(pid, e) {
+      let a = getAfter(apptDoc(e.id)).data;
+      return a.professional_id == pid && a.status == 'cancelado' && ownsAppt(a);
+    }
+
+    // ------------------------------------------------------------ agendamentos
+    match /appointments/{aid} {
+      allow read: if ownsAppt(resource.data) || isManager(resource.data.professional_id);
+
+      allow create: if isManager(request.resource.data.professional_id)
+        || clientCreate(aid, request.resource.data);
+
+      allow update: if (isManager(resource.data.professional_id)
+          && request.resource.data.professional_id == resource.data.professional_id)
+        || (ownsAppt(resource.data)
+          && resource.data.status in ['pendente', 'confirmado']
+          && request.resource.data.status == 'cancelado'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at']));
+
+      allow delete: if false;
+    }
+
+    function clientCreate(aid, a) {
+      let prof = get(profDoc(a.professional_id)).data;
+      let dayDoc = getAfter(/databases/$(database)/documents/professionals/$(a.professional_id)/days/$(a.day));
+      return signedIn() && a.client_id == me() && a.created_by == me()
+        && ((prof.requires_confirmation == true && a.status == 'pendente')
+          || (prof.requires_confirmation == false && a.status == 'confirmado'))
+        && dayDoc.data.busy.hasAny([{ 'id': aid, 's': a.start, 'e': a.end, 'c': me() }]);
+    }
+  }
+}

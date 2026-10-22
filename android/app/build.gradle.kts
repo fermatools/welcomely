@@ -3,10 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Endereço do servidor Welcomely aberto pelo app. Padrão: o computador hospedeiro visto do
-// emulador. Para outro servidor: .\build.ps1 -Servidor https://... (ou -PserverUrl=...).
+// Endereço do app web aberto pelo app Android. Padrão: o site publicado no GitHub Pages.
+// Para testar outra cópia: .\build.ps1 -Servidor http://... (ou -PserverUrl=...).
 // O usuário também pode trocar o endereço no próprio app (tela "Sobre" ou tela de erro).
-val serverUrl = providers.gradleProperty("serverUrl").getOrElse("http://10.0.2.2:5000/")
+val serverUrl = providers.gradleProperty("serverUrl").getOrElse("https://fermatools.github.io/welcomely/")
 
 android {
     namespace = "io.github.fermatools.welcomely"

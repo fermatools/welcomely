@@ -1,6 +1,6 @@
-import { api, setToken } from '../api.js';
+import * as api from '../api.js';
 import { go, homeFor, loadMe, state, takeRedirect } from '../state.js';
-import { busy, formData, icon } from '../ui.js';
+import { busy, esc, formData, icon, toast } from '../ui.js';
 
 const ROLE_CARDS = [
   ['cliente', 'Quero agendar', 'Marcar atendimentos com profissionais', 'calendar'],
@@ -17,13 +17,24 @@ function hero() {
     </div>`;
 }
 
-async function finish(data) {
-  setToken(data.token);
+async function finish() {
   await loadMe();
   go(takeRedirect() || homeFor(state.user));
 }
 
-export function login(el) {
+async function demoAccounts() {
+  if (!api.DEMO) return '';
+  const { DEMO_ACCOUNTS } = await import('../data/store-demo.js');
+  return `
+    <section class="card demo-box">
+      <h2>Experimente</h2>
+      <p class="muted small">Entre com uma conta de exemplo:</p>
+      <div class="demo-accounts">${DEMO_ACCOUNTS.map(([email, label]) => `
+        <button type="button" class="btn small" data-demo="${esc(email)}">${esc(label)}</button>`).join('')}</div>
+    </section>`;
+}
+
+export async function login(el) {
   el.innerHTML = `
     <div class="auth">
       ${hero()}
@@ -32,16 +43,30 @@ export function login(el) {
         <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
         <label>Senha<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="btn primary block" type="submit">Entrar</button>
+        <p class="center"><button type="button" class="link muted small" id="forgot">Esqueci minha senha</button></p>
         <p class="muted center">Ainda não tem conta? <a href="#/cadastro">Cadastre-se</a></p>
       </form>
+      ${await demoAccounts()}
       <p class="center"><a class="muted" href="#/sobre">Sobre o Welcomely</a></p>
     </div>`;
   const form = el.querySelector('form');
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
-    busy(form.querySelector('[type=submit]'), async () => finish(await api('/auth/login', { method: 'POST', body: formData(form) })));
+    busy(form.querySelector('[type=submit]'), async () => {
+      await api.login(formData(form));
+      await finish();
+    });
   });
+  el.querySelector('#forgot').addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    await api.resetPassword(form.elements.email.value);
+    toast('Enviamos um e-mail com o link para criar uma nova senha.');
+  }));
+  el.querySelectorAll('[data-demo]').forEach((b) => b.addEventListener('click', () => busy(b, async () => {
+    const { DEMO_PASSWORD } = await import('../data/store-demo.js');
+    await api.login({ email: b.dataset.demo, password: DEMO_PASSWORD });
+    await finish();
+  })));
 }
 
 export function register(el) {
@@ -70,6 +95,9 @@ export function register(el) {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
-    busy(form.querySelector('[type=submit]'), async () => finish(await api('/auth/register', { method: 'POST', body: formData(form) })));
+    busy(form.querySelector('[type=submit]'), async () => {
+      await api.register(formData(form));
+      await finish();
+    });
   });
 }

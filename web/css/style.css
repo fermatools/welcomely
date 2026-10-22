@@ -380,3 +380,12 @@ ul.plain { margin: 0; padding-left: 18px; }
 .toast.out { opacity: 0; transform: translateY(8px); }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 @media (min-width: 761px) { #toasts { bottom: 24px; } }
+
+/* ------------------------------------------------------------ demonstração */
+.demo-banner {
+  padding: 6px 16px; text-align: center; font-size: .85rem;
+  background: var(--warn-bg); color: var(--warn);
+}
+.demo-banner a { color: inherit; font-weight: 600; }
+.demo-box h2 { font-size: 1.05rem; margin-bottom: 2px; }
+.demo-accounts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

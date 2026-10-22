@@ -1,4 +1,4 @@
-import { api } from '../api.js';
+import * as api from '../api.js';
 import { APP_VERSION, DEVELOPER } from '../config.js';
 import { clearSession, go, loadMe, state } from '../state.js';
 import { busy, esc, formData, icon, toast } from '../ui.js';
@@ -62,6 +62,9 @@ export async function account(el) {
         </details>
         <div class="form-foot"><button class="btn primary" type="submit">Salvar</button></div>
       </form>
+      ${api.DEMO ? `<section class="card"><h2>Demonstração</h2>
+        <p class="muted small">Os dados de exemplo ficam só neste navegador.</p>
+        <button class="btn ghost danger" id="demo-reset">Restaurar dados de exemplo</button></section>` : ''}
       <div class="account-links">
         <a class="btn ghost" href="#/sobre">${icon('info')} Sobre o Welcomely</a>
         <button class="btn ghost danger" id="logout">${icon('logout')} Sair</button>
@@ -73,7 +76,7 @@ export async function account(el) {
     e.preventDefault();
     if (!me.reportValidity()) return;
     busy(me.querySelector('[type=submit]'), async () => {
-      await api('/me', { method: 'PUT', body: formData(me) });
+      await api.updateMe(formData(me));
       me.elements.current_password.value = '';
       me.elements.new_password.value = '';
       await loadMe();
@@ -86,7 +89,7 @@ export async function account(el) {
     e.preventDefault();
     if (!profile.reportValidity()) return;
     busy(profile.querySelector('[type=submit]'), async () => {
-      await api(`/professionals/${u.id}/profile`, { method: 'PUT', body: formData(profile) });
+      await api.updateProfile(u.id, formData(profile));
       toast('Perfil salvo.');
     });
   });
@@ -105,9 +108,14 @@ export async function account(el) {
     }
   });
 
+  el.querySelector('#demo-reset')?.addEventListener('click', async () => {
+    api.store.reset();
+    await clearSession();
+    location.reload();
+  });
+
   el.querySelector('#logout').addEventListener('click', async () => {
-    try { await api('/auth/logout', { method: 'POST' }); } catch { /* sai mesmo sem rede */ }
-    clearSession();
+    await clearSession();
     go('#/entrar');
   });
 }
@@ -125,6 +133,9 @@ export function about(el) {
         <p><a href="mailto:${DEVELOPER.email}">${DEVELOPER.email}</a><br>
           <a href="${DEVELOPER.site}" target="_blank" rel="noopener">${DEVELOPER.site.replace(/^https:\/\/|\/$/g, '')}</a></p>
       </section>
+      ${api.DEMO ? `<section class="card note"><h2>Modo demonstração</h2>
+        <p>Esta cópia do Welcomely funciona sem servidor: as contas e os agendamentos ficam guardados só neste
+          navegador, para você conhecer o app. Na tela de entrada há contas de exemplo (senha <b>demo123</b>).</p></section>` : ''}
       ${window.WelcomelyAndroid ? `<p><button class="btn ghost" id="server">Endereço do servidor</button><br>
         <small class="muted">${esc(window.WelcomelyAndroid.serverUrl())}</small></p>` : ''}
       <p><a href="${state.user ? '#/conta' : '#/entrar'}">${icon('left')} Voltar</a></p>

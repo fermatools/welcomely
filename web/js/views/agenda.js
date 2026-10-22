@@ -1,4 +1,4 @@
-import { api } from '../api.js';
+import * as api from '../api.js';
 import { currentPid, setPid, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, parseDate, spinner,
@@ -18,7 +18,7 @@ export function profPicker(pid) {
 }
 
 export function bindPicker(el, rerender) {
-  el.querySelector('#pid')?.addEventListener('change', (e) => { setPid(Number(e.target.value)); rerender(); });
+  el.querySelector('#pid')?.addEventListener('change', (e) => { setPid(e.target.value); rerender(); });
 }
 
 // Auxiliar ainda sem vínculo com nenhum profissional
@@ -122,7 +122,7 @@ export async function agenda(el) {
   page.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-act]');
     if (!b) return;
-    const appt = loaded.find((a) => a.id === Number(b.dataset.id));
+    const appt = loaded.find((a) => a.id === b.dataset.id);
     const act = b.dataset.act;
     if (act === 'remarcar') return appointmentForm(pid, appt, rerender);
     if (act === 'nota') return noteForm(appt, rerender);
@@ -130,17 +130,14 @@ export async function agenda(el) {
       `${appt.status === 'pendente' ? 'Recusar' : 'Cancelar'} o atendimento de ${appt.client_name}?`,
       { okLabel: appt.status === 'pendente' ? 'Recusar' : 'Cancelar atendimento', danger: true })) return undefined;
     return busy(b, async () => {
-      await api(`/appointments/${appt.id}`, { method: 'PATCH', body: { status: act } });
+      await api.updateAppointment(appt.id, { status: act });
       toast('Agendamento atualizado.');
       rerender();
     });
   });
 
   let loaded = [];
-  const [{ appointments }, { appointments: pending }] = await Promise.all([
-    api(`/professionals/${pid}/appointments?from=${from}&to=${to}`),
-    api(`/professionals/${pid}/appointments?from=${today()}&status=pendente`),
-  ]);
+  const [appointments, pending] = await Promise.all([api.agenda(pid, from, to), api.pending(pid)]);
   loaded = [...appointments, ...pending];
 
   if (pending.length) {
@@ -179,7 +176,7 @@ export async function agenda(el) {
 // ------------------------------------------------ novo agendamento / remarcar
 
 async function appointmentForm(pid, appt, onDone) {
-  const { services: all } = await api(`/professionals/${pid}/services`);
+  const all = await api.listServices(pid);
   const services = all.filter((s) => s.active);
   if (!services.length) {
     toast('Cadastre um serviço antes de agendar.', 'error');
@@ -215,13 +212,10 @@ async function appointmentForm(pid, appt, onDone) {
         return false;
       }
       if (reschedule) {
-        await api(`/appointments/${appt.id}`, { method: 'PATCH', body: { date: data.date, time } });
+        await api.updateAppointment(appt.id, { date: data.date, time });
         toast('Atendimento remarcado.');
       } else {
-        await api('/appointments', {
-          method: 'POST',
-          body: { ...data, professional_id: pid, service_id: Number(data.service_id), time, fit_in: data.fit_in },
-        });
+        await api.createAppointment({ ...data, professional_id: pid, time });
         toast('Atendimento agendado.');
       }
       onDone();
@@ -240,7 +234,7 @@ async function appointmentForm(pid, appt, onDone) {
     chosen = null;
     slotsEl.innerHTML = spinner();
     try {
-      const { slots } = await api(`/professionals/${pid}/slots?date=${form.elements.date.value}&service_id=${serviceId()}`);
+      const slots = await api.slots(pid, serviceId(), form.elements.date.value);
       if (mine !== seq) return;
       slotsEl.innerHTML = slots.length
         ? slots.map((t) => `<button type="button" class="slot" data-time="${t}">${t}</button>`).join('')
@@ -277,7 +271,7 @@ async function appointmentForm(pid, appt, onDone) {
       timer = setTimeout(async () => {
         if (nameInput.value.trim().length < 2) return;
         try {
-          ({ clients: found } = await api(`/professionals/${pid}/clients?q=${encodeURIComponent(nameInput.value.trim())}`));
+          found = await api.clientSuggestions(pid, nameInput.value.trim());
           dl.innerHTML = found.map((c) => `<option value="${esc(c.name)}">${esc(c.phone || c.email || '')}</option>`).join('');
         } catch { /* sugestões são opcionais */ }
       }, 250);
@@ -292,7 +286,7 @@ function noteForm(appt, onDone) {
     submitLabel: 'Salvar',
     body: `<label>Anotação<textarea name="notes" rows="4" maxlength="1000">${esc(appt.notes)}</textarea></label>`,
     onSubmit: async (form) => {
-      await api(`/appointments/${appt.id}`, { method: 'PATCH', body: { notes: form.elements.notes.value } });
+      await api.updateAppointment(appt.id, { notes: form.elements.notes.value });
       toast('Anotação salva.');
       onDone();
       return true;
