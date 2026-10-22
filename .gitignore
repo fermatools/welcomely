@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Banco de dados local (dados reais ou de demonstração)
+server/*.db
+server/*.db-journal
+
+# Android
+android/.gradle/
+android/local.properties
+android/build/
+android/app/build/
+android/.idea/
+android/.kotlin/
+*.iml
+*.apk
+*.aab
+*.jks
+*.keystore

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Welcomely</string>
+    <string name="error_title">Não foi possível conectar</string>
+    <string name="error_message">Verifique sua internet. Se o problema continuar, confira o endereço do servidor.</string>
+    <string name="retry">Tentar de novo</string>
+    <string name="server_settings">Endereço do servidor</string>
+    <string name="server_hint">https://agenda.exemplo.com</string>
+    <string name="save">Salvar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="restore_default">Padrão</string>
+    <string name="share_via">Compartilhar</string>
+    <string name="no_app">Nenhum app para abrir este link.</string>
+</resources>
