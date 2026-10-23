@@ -403,3 +403,17 @@ ul.plain { margin: 0; padding-left: 18px; }
 .chip-check input:focus-visible + span { outline: 2px solid var(--brand); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chip-check input:checked + span { color: #062420; } }
 .calendar-options { display: grid; gap: 8px; margin: 8px 0 12px; }
+
+/* ------------------------------------------------------------ adicionar pessoa */
+.small-search { margin-bottom: 8px; }
+.small-search input { min-height: 44px; font-size: 1rem; }
+.found { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.found-item {
+  text-align: left; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.found-item:hover { border-color: var(--brand); background: var(--brand-soft); }
+#picked { margin-bottom: 12px; }
+#picked span { flex: 1; }
+.divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .85rem; margin: 16px 0 12px; }
+.divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
