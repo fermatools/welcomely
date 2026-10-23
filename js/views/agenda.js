@@ -1,5 +1,6 @@
 import * as api from '../api.js';
 import { addToCalendar, downloadIcs, eventFor } from '../calendar.js';
+import { notifyClient } from '../notify.js';
 import { currentPid, setPid, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, parseDate, spinner,
@@ -44,7 +45,8 @@ function actionsFor(a) {
   const list = [];
   if (a.status === 'pendente') list.push(btn('confirmado', `${icon('check')} Confirmar`, 'primary'), btn('cancelado', 'Recusar', 'ghost danger'));
   if (a.status === 'confirmado') {
-    list.push(btn('concluido', 'Concluído'), btn('faltou', 'Faltou'), btn('remarcar', 'Remarcar'), btn('cancelado', 'Cancelar', 'ghost danger'));
+    list.push(btn('concluido', 'Concluído'), btn('faltou', 'Faltou'), btn('remarcar', 'Remarcar'), btn('avisar', 'Avisar'),
+      btn('cancelado', 'Cancelar', 'ghost danger'));
   }
   if (['concluido', 'faltou'].includes(a.status)) list.push(btn('confirmado', 'Desfazer'));
   if (['pendente', 'confirmado'].includes(a.status)) list.push(btn('agenda', `${icon('calendar')} Agenda`));
@@ -131,15 +133,19 @@ export async function agenda(el) {
     const appt = loaded.find((a) => a.id === b.dataset.id);
     const act = b.dataset.act;
     if (act === 'remarcar') return appointmentForm(pid, appt, rerender);
+    if (act === 'avisar') return notifyClient(appt, 'confirmado');
     if (act === 'nota') return noteForm(appt, rerender);
     if (act === 'agenda') return addToCalendar(eventFor(appt, false));
     if (act === 'cancelado' && !await confirmDialog(
       `${appt.status === 'pendente' ? 'Recusar' : 'Cancelar'} o atendimento de ${appt.client_name}?`,
       { okLabel: appt.status === 'pendente' ? 'Recusar' : 'Cancelar atendimento', danger: true })) return undefined;
     return busy(b, async () => {
-      await api.updateAppointment(appt.id, { status: act });
+      const updated = await api.updateAppointment(appt.id, { status: act });
       toast('Agendamento atualizado.');
       rerender();
+      // Ao confirmar um pedido ou cancelar, oferece avisar o cliente
+      if (act === 'confirmado' && appt.status === 'pendente') notifyClient(updated, 'confirmado');
+      if (act === 'cancelado') notifyClient(updated, 'cancelado');
     });
   });
 
@@ -224,11 +230,13 @@ async function appointmentForm(pid, appt, onDone) {
         return false;
       }
       if (reschedule) {
-        await api.updateAppointment(appt.id, { date: data.date, time });
+        const updated = await api.updateAppointment(appt.id, { date: data.date, time });
         toast('Atendimento remarcado.');
+        setTimeout(() => notifyClient(updated, 'remarcado'), 50);
       } else {
-        await api.createAppointment({ ...data, professional_id: pid, time });
+        const created = await api.createAppointment({ ...data, professional_id: pid, time });
         toast('Atendimento agendado.');
+        setTimeout(() => notifyClient(created, 'confirmado'), 50);
       }
       onDone();
       return true;
