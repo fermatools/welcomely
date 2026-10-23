@@ -389,3 +389,4 @@ ul.plain { margin: 0; padding-left: 18px; }
 .demo-banner a { color: inherit; font-weight: 600; }
 .demo-box h2 { font-size: 1.05rem; margin-bottom: 2px; }
 .demo-accounts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.note-inline { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); }

@@ -38,6 +38,7 @@ export function createFirebaseStore(config) {
   const app = initializeApp(config);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  let secondaryAuth = null;
   const ref = (path) => doc(db, path);
   const snapData = (s) => (s.exists() ? { id: s.id, ...s.data() } : null);
 
@@ -70,6 +71,23 @@ export function createFirebaseStore(config) {
     }),
     signIn: wrap(async (email, password) => { await signInWithEmailAndPassword(auth, email, password); }),
     signOut: wrap(() => signOut(auth)),
+    // Cria a conta de outra pessoa (senha aleatória) numa instância secundária, sem deslogar quem cadastra.
+    // A pessoa define a própria senha pelo e-mail de redefinição.
+    createAccount: wrap(async (email) => {
+      if (!secondaryAuth) secondaryAuth = getAuth(initializeApp(config, 'secundario'));
+      const bytes = crypto.getRandomValues(new Uint8Array(24));
+      const password = btoa(String.fromCharCode(...bytes));
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      await signOut(secondaryAuth);
+      return cred.user.uid;
+    }),
+    sendVerification: wrap(() => sendEmailVerification(auth.currentUser)),
+    // Relê a conta (ex.: depois de confirmar o e-mail) e renova o token usado pelas regras.
+    refreshUser: wrap(async () => {
+      if (!auth.currentUser) return;
+      await auth.currentUser.reload();
+      await auth.currentUser.getIdToken(true);
+    }),
     resetPassword: wrap((email) => sendPasswordResetEmail(auth, email)),
     changePassword: wrap(async (current, next) => {
       const user = auth.currentUser;

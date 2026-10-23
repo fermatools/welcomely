@@ -1,20 +1,23 @@
 // Camada de dados do Welcomely: regras do app sobre um "store" (Firebase ou demonstração).
 //
+// Perfis: admin (cadastra qualquer um, cria grupos), profissional/atendente (cadastra auxiliares e
+// clientes nos seus grupos), auxiliar (cadastra clientes; gerencia a agenda dos atendentes do grupo), cliente.
+//
 // Modelo no Firestore:
-//   users/{uid}                         nome, e-mail, telefone, perfil (privado)
-//   usersByEmail/{email}                uid, nome, perfil (para adicionar auxiliar pelo e-mail)
-//   professionals/{uid}                 perfil público, regras, grade semanal, uids dos auxiliares
-//     services/{id}                     tipos de atendimento (públicos)
-//     blocks/{id}                       bloqueios (férias etc.)
-//     days/{AAAA-MM-DD}                 horários ocupados do dia, sem dados pessoais (públicos)
-//     team/{uid}                        dados dos auxiliares (só gestores)
-//     clients/{id}                      clientes já atendidos (só gestores; sugestões)
-//   appointments/{id}                   agendamentos (gestores do profissional e o próprio cliente)
+//   users/{uid}                    nome, e-mail, telefone, perfil (privado: a própria pessoa e o admin)
+//   usersByEmail/{email}           uid, nome, perfil (para achar uma conta pelo e-mail ao cadastrar)
+//   groups/{gid}                   nome do grupo (o id serve de convite)
+//   memberships/{gid}_{uid}        participação: perfil, nome, contato, nome do grupo
+//   staff/{pid}_{auxUid}           grupos em que o auxiliar e o atendente estão juntos (dá acesso à agenda)
+//   professionals/{uid}            perfil do atendente, regras e grade semanal
+//     services/{id} · blocks/{id} · days/{AAAA-MM-DD} (horários ocupados, sem nomes) · clients/{id}
+//   appointments/{id}              agendamentos
 //
 // A reserva usa uma transação sobre o documento do dia: duas pessoas não conseguem pegar o mesmo horário.
+import { ADMIN_EMAIL_SHA256 } from './config.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
-  ACTIVE, addDays, busyIntervals, computeSlots, DATE_RE, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, minutes, nowLocal,
+  addDays, busyIntervals, computeSlots, DATE_RE, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, minutes, nowLocal,
   overlaps, STATUSES, TIME_RE, validateAvailability,
 } from './data/logic.js';
 
@@ -23,7 +26,14 @@ export const store = DEMO
   ? (await import('./data/store-demo.js')).createDemoStore()
   : (await import('./data/store-firebase.js')).createFirebaseStore(firebaseConfig);
 
-const ROLES = ['profissional', 'cliente', 'auxiliar'];
+export const ROLE_NAMES = { admin: 'Administrador', profissional: 'Atendente', auxiliar: 'Auxiliar', cliente: 'Cliente' };
+// Quem cada perfil pode cadastrar num grupo
+export const CAN_ADD = {
+  admin: ['profissional', 'auxiliar', 'cliente'],
+  profissional: ['auxiliar', 'cliente'],
+  auxiliar: ['cliente'],
+  cliente: [],
+};
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 class AppError extends Error {
@@ -35,6 +45,12 @@ const text = (v, max = 500) => String(v ?? '').trim().slice(0, max);
 const nowIso = () => new Date().toISOString();
 const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const byName = (a, b) => a.name.localeCompare(b.name, 'pt-BR');
+async function isAdminEmail(email) {
+  if (!crypto.subtle) return false;   // só existe em HTTPS/localhost
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('') === ADMIN_EMAIL_SHA256;
+}
+const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
 // Sessão atual (preenchida por me())
 let session = null;
@@ -45,20 +61,24 @@ function requireUid() {
   return uid;
 }
 
+const role = () => session?.user.role;
+const isAdmin = () => role() === 'admin';
 const isManager = (pid) => Boolean(session?.manages.some((p) => p.id === pid));
+/** Papel do usuário atual no grupo (admin vale como gestor de todos). */
+const roleIn = (gid) => (isAdmin() ? 'admin' : session?.groups.find((g) => g.gid === gid)?.role ?? null);
 
 function requireManager(pid) {
   requireUid();
-  if (!isManager(pid)) fail('Você não gerencia a agenda deste profissional.', 403);
+  if (!isManager(pid)) fail('Você não gerencia a agenda deste atendente.', 403);
 }
 
 function requireOwner(pid) {
-  if (requireUid() !== pid || session?.user.role !== 'profissional') fail('Apenas o próprio profissional pode alterar isto.', 403);
+  if (requireUid() !== pid || role() !== 'profissional') fail('Apenas o próprio atendente pode alterar isto.', 403);
 }
 
 async function getProf(pid) {
   const p = await store.get(`professionals/${pid}`);
-  if (!p) fail('Profissional não encontrado.', 404);
+  if (!p) fail('Atendente não encontrado.', 404);
   return p;
 }
 
@@ -67,7 +87,7 @@ function profileOut(p) {
     id: p.id, name: p.name, title: p.title, bio: p.bio, location: p.location,
     requires_confirmation: p.requires_confirmation, min_notice_hours: p.min_notice_hours,
     max_days_ahead: p.max_days_ahead, cancel_notice_hours: p.cancel_notice_hours,
-    slot_interval_min: p.slot_interval_min, public: p.public,
+    slot_interval_min: p.slot_interval_min,
   };
 }
 
@@ -80,21 +100,36 @@ const sortByStart = (list) => list.sort((a, b) => a.starts_at.localeCompare(b.st
 
 // ------------------------------------------------------------------ contas
 
-export async function register({ name, email, phone, password, role }) {
+/** Grupo de um convite (leitura pública: só o nome). */
+export async function getInvite(gid) {
+  const g = await store.get(`groups/${gid}`);
+  if (!g) fail('Convite inválido ou grupo inexistente.', 404);
+  return { gid, name: g.name };
+}
+
+/**
+ * Cadastro feito pela própria pessoa: cliente que chegou pelo link de convite de um grupo,
+ * ou o administrador (e-mail identificado pelo hash em config.js).
+ */
+export async function register({ name, email, phone, password, invite }) {
   name = text(name, 120);
   email = text(email, 200).toLowerCase();
   if (!name) fail('Informe o nome.');
   if (!EMAIL_RE.test(email)) fail('E-mail inválido.');
   if (String(password || '').length < 6) fail('A senha deve ter pelo menos 6 caracteres.');
-  if (!ROLES.includes(role)) fail('Perfil inválido.');
+  const asAdmin = await isAdminEmail(email);
+  const group = invite ? await getInvite(invite) : null;
+  if (!asAdmin && !group) fail('O cadastro é feito por convite. Peça o link ao seu atendente.');
+  const userRole = asAdmin ? 'admin' : 'cliente';
   const uid = await store.signUp(email, password);
+  phone = text(phone, 40);
   await store.tx(async (t) => {
-    t.set(`users/${uid}`, { name, email, phone: text(phone, 40), role, created_at: nowIso() });
-    t.set(`usersByEmail/${email}`, { uid, name, role });
-    if (role === 'profissional') {
-      t.set(`professionals/${uid}`, { ...DEFAULT_PROFILE, name, availability: DEFAULT_AVAILABILITY, assistants: [] });
-      t.set(`professionals/${uid}/services/${store.newId(`professionals/${uid}/services`)}`,
-        { name: 'Atendimento', description: '', duration_min: 30, active: true });
+    t.set(`users/${uid}`, { name, email, phone, role: userRole, created_by: uid, created_at: nowIso() });
+    t.set(`usersByEmail/${email}`, { uid, name, role: userRole, created_by: uid });
+    if (group && !asAdmin) {
+      t.set(`memberships/${group.gid}_${uid}`, {
+        gid: group.gid, uid, role: 'cliente', name, email, phone, group_name: group.name, added_by: uid, added_at: nowIso(),
+      });
     }
   });
 }
@@ -114,21 +149,32 @@ export async function resetPassword(email) {
   await store.resetPassword(email);
 }
 
+export const resendVerification = () => store.sendVerification();
+
 export async function me() {
   const uid = requireUid();
-  const user = await store.get(`users/${uid}`);
-  if (!user) fail('Cadastro incompleto. Saia e cadastre-se de novo, ou fale com o suporte.', 401);
+  let user = await store.get(`users/${uid}`);
+  if (!user) fail('Cadastro incompleto. Fale com quem cadastrou você.', 401);
+  if (user.role === 'admin' && !store.emailVerified()) await store.refreshUser();
+  const memberships = await store.list('memberships', [['uid', '==', uid]]);
   const result = {
     user: { id: uid, name: user.name, email: user.email, phone: user.phone || '', role: user.role },
+    groups: memberships.map((m) => ({ gid: m.gid, name: m.group_name, role: m.role })).sort(byName),
     manages: [],
     profile: null,
+    // O admin só vale com o e-mail confirmado (as regras do Firestore exigem isso)
+    needsVerification: user.role === 'admin' && !store.emailVerified(),
   };
   if (user.role === 'profissional') {
     const p = await getProf(uid);
     result.profile = profileOut(p);
     result.manages = [{ id: uid, name: p.name, title: p.title }];
   } else if (user.role === 'auxiliar') {
-    const profs = await store.list('professionals', [['assistants', 'array-contains', uid]]);
+    const links = (await store.list('staff', [['aux', '==', uid]])).filter((s) => s.gids?.length);
+    const profs = await Promise.all(links.map((s) => store.get(`professionals/${s.pid}`)));
+    result.manages = profs.filter(Boolean).map((p) => ({ id: p.id, name: p.name, title: p.title })).sort(byName);
+  } else if (user.role === 'admin' && !result.needsVerification) {
+    const profs = await store.list('professionals');
     result.manages = profs.map((p) => ({ id: p.id, name: p.name, title: p.title })).sort(byName);
   }
   session = result;
@@ -138,27 +184,163 @@ export async function me() {
 export async function updateMe({ name, phone, current_password, new_password }) {
   const uid = requireUid();
   name = text(name, 120);
+  phone = text(phone, 40);
   if (!name) fail('Informe o nome.');
   if (new_password) {
     if (String(new_password).length < 6) fail('A nova senha deve ter pelo menos 6 caracteres.');
     await store.changePassword(String(current_password || ''), String(new_password));
   }
-  const { email, role } = session.user;
+  const { email } = session.user;
   await store.tx(async (t) => {
-    t.update(`users/${uid}`, { name, phone: text(phone, 40) });
+    t.update(`users/${uid}`, { name, phone });
     t.update(`usersByEmail/${email}`, { name });
-    if (role === 'profissional') t.update(`professionals/${uid}`, { name });
+    if (role() === 'profissional') t.update(`professionals/${uid}`, { name });
+    for (const g of session.groups) t.update(`memberships/${g.gid}_${uid}`, { name, phone });
   });
 }
 
-// ------------------------------------------------------------ profissionais
+// ---------------------------------------------------------------- grupos
 
+/** Grupos visíveis: todos para o admin; os seus para os demais. */
+export async function listGroups() {
+  requireUid();
+  if (isAdmin()) {
+    return (await store.list('groups')).map((g) => ({ gid: g.id, name: g.name, role: 'admin' })).sort(byName);
+  }
+  return session.groups;
+}
+
+export async function createGroup(name) {
+  requireUid();
+  if (!isAdmin()) fail('Apenas o administrador cria grupos.', 403);
+  name = text(name, 120);
+  if (!name) fail('Informe o nome do grupo.');
+  const gid = store.newId('groups');
+  await store.set(`groups/${gid}`, { name, created_at: nowIso() });
+  return gid;
+}
+
+/** Membros de um grupo (para atendente, auxiliar e admin). */
+export async function groupMembers(gid) {
+  const r = roleIn(gid);
+  if (!['admin', 'profissional', 'auxiliar'].includes(r)) fail('Você não gerencia este grupo.', 403);
+  const [group, members] = await Promise.all([store.get(`groups/${gid}`), store.list('memberships', [['gid', '==', gid]])]);
+  if (!group) fail('Grupo não encontrado.', 404);
+  return { gid, name: group.name, myRole: r, canAdd: CAN_ADD[r], members: members.sort(byName) };
+}
+
+/** Atualiza o vínculo auxiliar ↔ atendente de um grupo (acrescenta ou retira o grupo da lista). */
+async function linkStaff(pid, aux, gid, add) {
+  await store.tx(async (t) => {
+    const path = `staff/${pid}_${aux}`;
+    const cur = await t.get(path);
+    const gids = new Set(cur?.gids || []);
+    if (add === gids.has(gid)) return;
+    if (add) gids.add(gid); else gids.delete(gid);
+    t.set(path, { pid, aux, gids: [...gids] });
+  });
+}
+
+/**
+ * Cadastra uma pessoa num grupo. Se ainda não houver conta com o e-mail, cria a conta e a pessoa recebe um
+ * e-mail para criar a própria senha. Devolve { created } (true = conta nova).
+ */
+export async function addMember(gid, { name, email, phone, role: newRole }) {
+  const uid0 = requireUid();
+  const r = roleIn(gid);
+  if (!CAN_ADD[r || 'cliente']?.includes(newRole)) fail('Você não pode cadastrar este perfil neste grupo.', 403);
+  name = text(name, 120);
+  email = text(email, 200).toLowerCase();
+  phone = text(phone, 40);
+  if (!EMAIL_RE.test(email)) fail('E-mail inválido.');
+  const group = await store.get(`groups/${gid}`);
+  if (!group) fail('Grupo não encontrado.', 404);
+
+  let uid;
+  let created = false;
+  const existing = await store.get(`usersByEmail/${email}`);
+  if (existing) {
+    if (existing.role !== newRole) {
+      fail(`Este e-mail já tem conta como ${ROLE_NAMES[existing.role].toLowerCase()}. Cada conta tem um só perfil.`);
+    }
+    uid = existing.uid;
+    name = existing.name;   // a conta já existe: vale o nome que a pessoa usa
+    if (await store.get(`memberships/${gid}_${uid}`)) fail('Esta pessoa já está no grupo.');
+  } else {
+    if (!name) fail('Informe o nome.');
+    uid = await store.createAccount(email);
+    created = true;
+  }
+
+  const members = await store.list('memberships', [['gid', '==', gid]]);
+  await store.tx(async (t) => {
+    if (created) {
+      t.set(`users/${uid}`, { name, email, phone, role: newRole, created_by: uid0, created_at: nowIso() });
+      t.set(`usersByEmail/${email}`, { uid, name, role: newRole, created_by: uid0 });
+      if (newRole === 'profissional') {
+        t.set(`professionals/${uid}`, { ...DEFAULT_PROFILE, name, availability: DEFAULT_AVAILABILITY });
+        t.set(`professionals/${uid}/services/${store.newId(`professionals/${uid}/services`)}`,
+          { name: 'Atendimento', description: '', duration_min: 30, active: true });
+      }
+    }
+    t.set(`memberships/${gid}_${uid}`, {
+      gid, uid, role: newRole, name, email, phone, group_name: group.name, added_by: uid0, added_at: nowIso(),
+    });
+  });
+  // Auxiliar passa a gerenciar os atendentes do grupo (e vice-versa)
+  if (newRole === 'auxiliar') {
+    for (const m of members.filter((x) => x.role === 'profissional')) await linkStaff(m.uid, uid, gid, true);
+  } else if (newRole === 'profissional') {
+    for (const m of members.filter((x) => x.role === 'auxiliar')) await linkStaff(uid, m.uid, gid, true);
+  }
+  if (created && !store.demo) await store.resetPassword(email);
+  return { created };
+}
+
+export async function removeMember(gid, uid) {
+  requireUid();
+  const m = await store.get(`memberships/${gid}_${uid}`);
+  if (!m) fail('Esta pessoa não está no grupo.', 404);
+  if (!CAN_ADD[roleIn(gid) || 'cliente']?.includes(m.role)) fail('Você não pode retirar esta pessoa do grupo.', 403);
+  const members = await store.list('memberships', [['gid', '==', gid]]);
+  if (m.role === 'auxiliar') {
+    for (const p of members.filter((x) => x.role === 'profissional')) await linkStaff(p.uid, uid, gid, false);
+  } else if (m.role === 'profissional') {
+    for (const a of members.filter((x) => x.role === 'auxiliar')) await linkStaff(uid, a.uid, gid, false);
+  }
+  await store.remove(`memberships/${gid}_${uid}`);
+}
+
+/** Cliente já logado que abriu o link de convite de outro grupo. */
+export async function joinGroup(gid) {
+  const uid = requireUid();
+  if (role() !== 'cliente') fail('O convite é para clientes. Peça a quem administra o grupo para incluir você.');
+  const group = await getInvite(gid);
+  if (session.groups.some((g) => g.gid === gid)) return;
+  const u = session.user;
+  await store.set(`memberships/${gid}_${uid}`, {
+    gid, uid, role: 'cliente', name: u.name, email: u.email, phone: u.phone, group_name: group.name, added_by: uid, added_at: nowIso(),
+  });
+}
+
+// ------------------------------------------------------------ atendentes
+
+/** Atendentes dos grupos do cliente (cada um com os grupos em comum). */
 export async function listProfessionals(q = '') {
+  requireUid();
   const terms = fold(q).split(/\s+/).filter(Boolean);
-  const rows = await store.list('professionals', [['public', '==', true]]);
-  return rows
-    .filter((p) => terms.every((t) => fold(`${p.name} ${p.title} ${p.location}`).includes(t)))
-    .map(profileOut)
+  const groups = isAdmin() ? await listGroups() : session.groups;
+  const lists = await Promise.all(groups.map((g) => store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'profissional']])));
+  const byPid = new Map();
+  lists.flat().forEach((m) => {
+    const entry = byPid.get(m.uid) || { pid: m.uid, groups: [] };
+    entry.groups.push(m.group_name);
+    byPid.set(m.uid, entry);
+  });
+  const profs = await Promise.all([...byPid.keys()].map((pid) => store.get(`professionals/${pid}`)));
+  return profs.filter(Boolean)
+    .map((p) => ({ ...profileOut(p), groups: byPid.get(p.id).groups }))
+    .filter((p) => terms.every((t) => fold(`${p.name} ${p.title} ${p.location} ${p.groups.join(' ')}`).includes(t)))
     .sort(byName);
 }
 
@@ -175,7 +357,7 @@ export async function updateProfile(pid, data) {
   const updates = {};
   for (const k of ['title', 'location']) if (k in data) updates[k] = text(data[k], 200);
   if ('bio' in data) updates.bio = text(data.bio, 2000);
-  for (const k of ['requires_confirmation', 'public']) if (k in data) updates[k] = Boolean(data[k]);
+  if ('requires_confirmation' in data) updates.requires_confirmation = Boolean(data.requires_confirmation);
   for (const [k, [lo, hi]] of Object.entries(PROFILE_INTS)) {
     if (!(k in data)) continue;
     const v = Number(data[k]);
@@ -237,7 +419,7 @@ export async function setAvailability(pid, rules) {
 export async function listBlocks(pid) {
   requireManager(pid);
   const now = nowLocal();
-  const stamp = `${now.date}T${String(Math.floor(now.min / 60)).padStart(2, '0')}:${String(now.min % 60).padStart(2, '0')}`;
+  const stamp = `${now.date}T${hhmm(now.min)}`;
   const rows = await store.list(`professionals/${pid}/blocks`);
   return rows.filter((b) => b.ends_at > stamp).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
 }
@@ -270,39 +452,9 @@ export async function deleteBlock(pid, bid) {
   await store.remove(`professionals/${pid}/blocks/${bid}`);
 }
 
-// ------------------------------------------------------------- auxiliares
-
-export async function listAssistants(pid) {
-  requireOwner(pid);
-  return (await store.list(`professionals/${pid}/team`)).sort(byName);
-}
-
-export async function addAssistant(pid, email) {
-  requireOwner(pid);
-  email = text(email, 200).toLowerCase();
-  const found = EMAIL_RE.test(email) ? await store.get(`usersByEmail/${email}`) : null;
-  if (!found || found.role !== 'auxiliar') {
-    fail('Não há conta de auxiliar com este e-mail. Peça para a pessoa se cadastrar como auxiliar.', 404);
-  }
-  await store.tx(async (t) => {
-    const prof = await t.get(`professionals/${pid}`);
-    t.update(`professionals/${pid}`, { assistants: [...new Set([...(prof.assistants || []), found.uid])] });
-    t.set(`professionals/${pid}/team/${found.uid}`, { name: found.name, email });
-  });
-}
-
-export async function removeAssistant(pid, aid) {
-  requireOwner(pid);
-  await store.tx(async (t) => {
-    const prof = await t.get(`professionals/${pid}`);
-    t.update(`professionals/${pid}`, { assistants: (prof.assistants || []).filter((id) => id !== aid) });
-    t.remove(`professionals/${pid}/team/${aid}`);
-  });
-}
-
 // ------------------------------------------------------------ agendamentos
 
-/** Agendamentos de um profissional entre duas datas (inclusive). */
+/** Agendamentos de um atendente entre duas datas (inclusive). */
 export async function agenda(pid, from, to) {
   requireManager(pid);
   const days = [];
@@ -321,13 +473,19 @@ export async function pending(pid) {
   return sortByStart(rows.filter((a) => a.day >= today).map(apptOut));
 }
 
+/** Clientes para sugerir ao agendar: os dos grupos do usuário e os já atendidos sem conta. */
 export async function clientSuggestions(pid, q) {
   requireManager(pid);
   const term = fold(q);
-  const rows = await store.list(`professionals/${pid}/clients`);
-  return rows
+  const staffGroups = isAdmin() ? [] : session.groups.filter((g) => g.role !== 'cliente');
+  const [past, ...groupLists] = await Promise.all([
+    store.list(`professionals/${pid}/clients`),
+    ...staffGroups.map((g) => store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'cliente']])),
+  ]);
+  const seen = new Set();
+  return [...groupLists.flat().map((m) => ({ name: m.name, phone: m.phone, email: m.email, last: '' })), ...past]
     .filter((c) => fold(`${c.name} ${c.phone} ${c.email}`).includes(term))
-    .sort((a, b) => b.last.localeCompare(a.last))
+    .filter((c) => { const k = c.email || `${c.name}|${c.phone}`; if (seen.has(k)) return false; seen.add(k); return true; })
     .slice(0, 20);
 }
 
@@ -360,11 +518,11 @@ export async function createAppointment(data) {
   const start = minutes(time);
   const end = start + service.duration_min;
   if (end > 24 * 60) fail('O atendimento precisa terminar no mesmo dia.');
-  const endTime = `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
   const manager = isManager(pid);
 
   let client;
   let status;
+  let gid = '';
   if (manager) {
     const name = text(data.client_name, 120);
     if (!name) fail('Informe o nome do cliente.');
@@ -377,6 +535,10 @@ export async function createAppointment(data) {
       fail('Horário indisponível. Para agendar fora da grade, marque como encaixe.', 409);
     }
   } else {
+    // O cliente só agenda com atendentes de um grupo em comum
+    const shared = await Promise.all(session.groups.map((g) => store.get(`memberships/${g.gid}_${pid}`)));
+    gid = session.groups[shared.findIndex((m) => m && m.role === 'profissional')]?.gid;
+    if (!gid) fail('Você não faz parte de nenhum grupo deste atendente.', 403);
     const u = session.user;
     client = { client_id: uid, client_name: u.name, client_phone: u.phone, client_email: u.email };
     status = prof.requires_confirmation ? 'pendente' : 'confirmado';
@@ -386,8 +548,9 @@ export async function createAppointment(data) {
   }
 
   const id = store.newId('appointments');
+  const endTime = hhmm(end);
   const appt = {
-    professional_id: pid, professional_name: prof.name, professional_title: prof.title || '',
+    gid, professional_id: pid, professional_name: prof.name, professional_title: prof.title || '',
     professional_location: prof.location || '',
     service_id: data.service_id, service_name: service.name, duration_min: service.duration_min,
     ...client, day, start: time, end: endTime, status, notes: text(data.notes, 1000),
@@ -402,14 +565,15 @@ export async function createAppointment(data) {
     t.set(`appointments/${id}`, appt);
     t.set(dayPath, { busy: [...(fresh?.busy || []), { id, s: time, e: endTime, c: client.client_id }] });
   });
-  // Sugestão de cliente para as próximas vezes (não essencial)
-  store.set(`professionals/${pid}/clients/${clientKey(client.client_id, client.client_name, client.client_phone)}`,
-    { name: client.client_name, phone: client.client_phone, email: client.client_email, last: `${day}T${time}` })
-    .catch(() => {});
+  // Sugestão de cliente sem conta para as próximas vezes (não essencial)
+  if (manager && !client.client_email) {
+    store.set(`professionals/${pid}/clients/${clientKey(null, client.client_name, client.client_phone)}`,
+      { name: client.client_name, phone: client.client_phone, email: '', last: `${day}T${time}` }).catch(() => {});
+  }
   return apptOut({ id, ...appt });
 }
 
-/** Muda a situação, a anotação ou o horário (remarcar: só profissional/auxiliar). */
+/** Muda a situação, a anotação ou o horário (remarcar: só atendente/auxiliar). */
 export async function updateAppointment(id, data) {
   const uid = requireUid();
   const a = await store.get(`appointments/${id}`);
@@ -424,10 +588,9 @@ export async function updateAppointment(id, data) {
   if (!manager) {
     if (Object.keys(data).some((k) => k !== 'status') || data.status !== 'cancelado') fail('Você só pode cancelar o seu agendamento.', 403);
     const prof = await getProf(pid);
-    const now = nowLocal();
     const minutesLeft = (new Date(`${a.day}T${a.start}`) - new Date()) / 60000;
-    if (a.status === 'confirmado' && minutesLeft < prof.cancel_notice_hours * 60 && a.day >= now.date) {
-      fail(`Cancelamentos precisam de ${prof.cancel_notice_hours} h de antecedência. Entre em contato com o profissional.`, 403);
+    if (a.status === 'confirmado' && minutesLeft < prof.cancel_notice_hours * 60 && minutesLeft > 0) {
+      fail(`Cancelamentos precisam de ${prof.cancel_notice_hours} h de antecedência. Entre em contato com o atendente.`, 403);
     }
   }
   if ('status' in data) {
@@ -442,7 +605,7 @@ export async function updateAppointment(id, data) {
     if (end > 24 * 60) fail('O atendimento precisa terminar no mesmo dia.');
     updates.day = data.date;
     updates.start = data.time;
-    updates.end = `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
+    updates.end = hhmm(end);
   }
   const blocks = moving ? await store.list(`professionals/${pid}/blocks`) : [];
   const oldPath = `professionals/${pid}/days/${a.day}`;
@@ -460,13 +623,9 @@ export async function updateAppointment(id, data) {
       const entry = { id, s: updates.start, e: updates.end, c: a.client_id ?? null };
       if (newPath === oldPath) oldBusy = [...oldBusy, entry];
       else t.set(newPath, { busy: [...target, entry] });
-    } else if (!freed) {
-      oldBusy = oldDoc?.busy || [];
     }
     t.update(`appointments/${id}`, updates);
     if (freed || moving) t.set(oldPath, { busy: oldBusy });
   });
   return apptOut({ ...a, ...updates, id });
 }
-
-export const isActive = (status) => ACTIVE.includes(status);

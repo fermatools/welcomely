@@ -4,26 +4,22 @@ const PID_KEY = 'welcomely.pid';
 const REDIRECT_KEY = 'welcomely.redirect';
 
 // Sessão atual: usuário, profissionais que ele gerencia e (se profissional) o perfil.
-export const state = { user: null, manages: [], profile: null };
+export const state = { user: null, groups: [], manages: [], profile: null, needsVerification: false };
 
 export async function loadMe() {
   const data = await api.me();
-  state.user = data.user;
-  state.manages = data.manages;
-  state.profile = data.profile;
+  Object.assign(state, data);
   return state;
 }
 
 export async function clearSession() {
-  state.user = null;
-  state.manages = [];
-  state.profile = null;
+  Object.assign(state, { user: null, groups: [], manages: [], profile: null, needsVerification: false });
   await api.logout().catch(() => {});
 }
 
 export function homeFor(user) {
   if (!user) return '#/entrar';
-  return user.role === 'cliente' ? '#/buscar' : '#/agenda';
+  return { cliente: '#/buscar', admin: '#/grupos' }[user.role] || '#/agenda';
 }
 
 export function go(hash) {

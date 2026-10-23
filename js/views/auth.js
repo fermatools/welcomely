@@ -2,12 +2,6 @@ import * as api from '../api.js';
 import { go, homeFor, loadMe, state, takeRedirect } from '../state.js';
 import { busy, esc, formData, icon, toast } from '../ui.js';
 
-const ROLE_CARDS = [
-  ['cliente', 'Quero agendar', 'Marcar atendimentos com profissionais', 'calendar'],
-  ['profissional', 'Eu atendo', 'Profissional liberal, sacerdote, consultor…', 'user'],
-  ['auxiliar', 'Sou auxiliar', 'Secretária ou assistente de quem atende', 'users'],
-];
-
 function hero() {
   return `
     <div class="auth-hero">
@@ -44,7 +38,7 @@ export async function login(el) {
         <label>Senha<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="btn primary block" type="submit">Entrar</button>
         <p class="center"><button type="button" class="link muted small" id="forgot">Esqueci minha senha</button></p>
-        <p class="muted center">Ainda não tem conta? <a href="#/cadastro">Cadastre-se</a></p>
+        <p class="muted small center">Ainda não tem conta? Peça o link de convite ao seu atendente.</p>
       </form>
       ${await demoAccounts()}
       <p class="center"><a class="muted" href="#/sobre">Sobre o Welcomely</a></p>
@@ -69,20 +63,16 @@ export async function login(el) {
   })));
 }
 
-export function register(el) {
+export async function register(el, invite) {
+  const group = invite ? await api.getInvite(invite).catch(() => null) : null;
   el.innerHTML = `
     <div class="auth">
       ${hero()}
       <form class="card auth-card" novalidate>
         <h2>Criar conta</h2>
-        <fieldset class="roles">
-          <legend>Como você vai usar o Welcomely?</legend>
-          ${ROLE_CARDS.map(([value, title, desc, ic], i) => `
-            <label class="role-card">
-              <input type="radio" name="role" value="${value}" ${i === 0 ? 'checked' : ''}>
-              ${icon(ic)}<span><b>${title}</b><small>${desc}</small></span>
-            </label>`).join('')}
-        </fieldset>
+        ${group ? `<p class="note-inline">${icon('users')} Você vai entrar em <b>${esc(group.name)}</b>.</p>`
+          : `<p class="muted small">O cadastro é feito pelo link de convite que o seu atendente envia.
+              ${invite ? '<b>Este convite não é válido.</b>' : ''}</p>`}
         <label>Nome completo<input name="name" autocomplete="name" required maxlength="120"></label>
         <label>E-mail<input name="email" type="email" autocomplete="email" required></label>
         <label>Telefone / WhatsApp <small class="muted">(opcional)</small><input name="phone" type="tel" autocomplete="tel"></label>
@@ -96,7 +86,7 @@ export function register(el) {
     e.preventDefault();
     if (!form.reportValidity()) return;
     busy(form.querySelector('[type=submit]'), async () => {
-      await api.register(formData(form));
+      await api.register({ ...formData(form), invite: group?.gid });
       await finish();
     });
   });

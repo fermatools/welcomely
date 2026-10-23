@@ -6,29 +6,34 @@ import * as auth from './views/auth.js';
 import * as cliente from './views/cliente.js';
 import * as conta from './views/conta.js';
 import * as gestao from './views/gestao.js';
+import * as grupos from './views/grupos.js';
 
-const MANAGERS = ['profissional', 'auxiliar'];
+const MANAGERS = ['profissional', 'auxiliar', 'admin'];
+const GROUP_STAFF = ['profissional', 'auxiliar', 'admin'];
 
 const NAV = {
   cliente: [['#/buscar', 'Buscar', 'search'], ['#/meus', 'Agendamentos', 'calendar'], ['#/conta', 'Conta', 'user']],
   profissional: [['#/agenda', 'Agenda', 'calendar'], ['#/servicos', 'Serviços', 'list'], ['#/horarios', 'Horários', 'clock'],
-    ['#/equipe', 'Equipe', 'users'], ['#/conta', 'Conta', 'user']],
+    ['#/grupos', 'Grupos', 'users'], ['#/conta', 'Conta', 'user']],
   auxiliar: [['#/agenda', 'Agenda', 'calendar'], ['#/servicos', 'Serviços', 'list'], ['#/horarios', 'Horários', 'clock'],
-    ['#/conta', 'Conta', 'user']],
+    ['#/grupos', 'Grupos', 'users'], ['#/conta', 'Conta', 'user']],
+  admin: [['#/grupos', 'Grupos', 'users'], ['#/agenda', 'Agendas', 'calendar'], ['#/conta', 'Conta', 'user']],
 };
 
 // [padrão, view, opções]. public: abre sem login; roles: perfis que podem abrir.
 const ROUTES = [
   [/^\/entrar$/, auth.login, { public: true, bare: true }],
-  [/^\/cadastro$/, auth.register, { public: true, bare: true }],
+  [/^\/cadastro(?:\/([\w-]+))?$/, auth.register, { public: true, bare: true }],
+  [/^\/convite\/([\w-]+)$/, grupos.invite, { public: true }],
   [/^\/sobre$/, conta.about, { public: true }],
-  [/^\/p\/([\w-]+)$/, cliente.professionalPage, { public: true }],
+  [/^\/p\/([\w-]+)$/, cliente.professionalPage, {}],
   [/^\/buscar$/, cliente.search, {}],
   [/^\/meus$/, cliente.mine, {}],
   [/^\/agenda$/, agenda.agenda, { roles: MANAGERS }],
   [/^\/servicos$/, gestao.services, { roles: MANAGERS }],
   [/^\/horarios$/, gestao.hours, { roles: MANAGERS }],
-  [/^\/equipe$/, gestao.team, { roles: ['profissional'] }],
+  [/^\/grupos$/, grupos.list, { roles: GROUP_STAFF }],
+  [/^\/grupos\/([\w-]+)$/, grupos.detail, { roles: GROUP_STAFF }],
   [/^\/conta$/, conta.account, {}],
 ];
 
