@@ -229,6 +229,29 @@ export async function groupMembers(gid) {
   return { gid, name: group.name, myRole: r, canAdd: CAN_ADD[r], members: members.sort(byName) };
 }
 
+/**
+ * Pessoas que já têm conta e podem ser adicionadas ao grupo: todas as contas para o admin; para atendente e
+ * auxiliar, as pessoas dos outros grupos que eles gerenciam. Só perfis que o usuário pode cadastrar.
+ */
+export async function knownPeople(gid) {
+  const r = roleIn(gid);
+  const allowed = CAN_ADD[r || 'cliente'] || [];
+  if (!allowed.length) return [];
+  const inGroup = new Set((await store.list('memberships', [['gid', '==', gid]])).map((m) => m.uid));
+  let people;
+  if (isAdmin()) {
+    people = (await store.list('users')).map((u) => ({ uid: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role }));
+  } else {
+    const others = session.groups.filter((g) => g.gid !== gid && ['profissional', 'auxiliar'].includes(g.role));
+    const lists = await Promise.all(others.map((g) => store.list('memberships', [['gid', '==', g.gid]])));
+    people = lists.flat().map((m) => ({ uid: m.uid, name: m.name, email: m.email, phone: m.phone || '', role: m.role }));
+  }
+  const seen = new Set();
+  return people
+    .filter((p) => allowed.includes(p.role) && !inGroup.has(p.uid) && !seen.has(p.uid) && seen.add(p.uid))
+    .sort(byName);
+}
+
 /** Atualiza o vínculo auxiliar ↔ atendente de um grupo (acrescenta ou retira o grupo da lista). */
 async function linkStaff(pid, aux, gid, add) {
   await store.tx(async (t) => {

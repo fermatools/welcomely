@@ -86,7 +86,7 @@ export async function detail(el, gid) {
     <div class="page narrow">
       <p><a href="#/grupos">${icon('left')} Grupos</a></p>
       <div class="page-head"><h1>${esc(g.name)}</h1>
-        ${g.canAdd.length ? `<button class="btn primary" id="add">${icon('plus')} Cadastrar</button>` : ''}</div>
+        ${g.canAdd.length ? `<button class="btn primary" id="add">${icon('plus')} Adicionar pessoa</button>` : ''}</div>
       <section class="card">
         <h2>Convite para clientes</h2>
         <p class="muted small">Quem abrir este link pode criar uma conta de cliente já dentro deste grupo.</p>
@@ -119,30 +119,87 @@ export async function detail(el, gid) {
 }
 
 function addForm(g, onDone) {
-  modal({
-    title: `Cadastrar em ${g.name}`,
-    submitLabel: 'Cadastrar',
+  let picked = null;   // pessoa já cadastrada escolhida na busca
+  const m = modal({
+    title: `Adicionar a ${g.name}`,
+    submitLabel: 'Adicionar',
     body: `
-      <fieldset class="roles">
-        <legend>Perfil</legend>
-        ${g.canAdd.map((r, i) => `
-          <label class="role-card"><input type="radio" name="role" value="${r}"${i === g.canAdd.length - 1 ? ' checked' : ''}>
-            ${icon(r === 'cliente' ? 'calendar' : r === 'auxiliar' ? 'users' : 'user')}
-            <span><b>${api.ROLE_NAMES[r]}</b></span></label>`).join('')}
-      </fieldset>
-      <label>E-mail<input name="email" type="email" required autocomplete="off"></label>
-      <label>Nome completo<input name="name" maxlength="120" autocomplete="off"></label>
-      <label>Telefone / WhatsApp <small class="muted">(opcional)</small><input name="phone" type="tel" autocomplete="off"></label>
-      <p class="muted small">Se a pessoa ainda não tiver conta, ela recebe um e-mail para criar a própria senha
-        (pode cair no spam). Se já tiver, só passa a fazer parte do grupo.</p>`,
+      <div class="field">
+        <span class="field-label">Pessoa já cadastrada</span>
+        <label class="search small-search">${icon('search')}
+          <input id="find" type="search" placeholder="Buscar por nome ou e-mail" autocomplete="off" aria-label="Buscar pessoa"></label>
+        <div id="found" class="found"></div>
+      </div>
+      <div id="picked" class="note-inline" hidden></div>
+      <div id="new-person">
+        <p class="divider"><span>ou cadastre uma pessoa nova</span></p>
+        <fieldset class="roles">
+          <legend>Perfil</legend>
+          ${g.canAdd.map((r, i) => `
+            <label class="role-card"><input type="radio" name="role" value="${r}"${i === g.canAdd.length - 1 ? ' checked' : ''}>
+              ${icon(r === 'cliente' ? 'calendar' : r === 'auxiliar' ? 'users' : 'user')}
+              <span><b>${api.ROLE_NAMES[r]}</b></span></label>`).join('')}
+        </fieldset>
+        <label>E-mail<input name="email" type="email" autocomplete="off"></label>
+        <label>Nome completo<input name="name" maxlength="120" autocomplete="off"></label>
+        <label>Telefone / WhatsApp <small class="muted">(opcional)</small><input name="phone" type="tel" autocomplete="off"></label>
+        <p class="muted small">Quem ainda não tem conta recebe um e-mail para criar a própria senha (pode cair no spam).
+          Se o e-mail já tiver conta, a pessoa só passa a fazer parte do grupo.</p>
+      </div>`,
     onSubmit: async (form) => {
-      const res = await api.addMember(g.gid, formData(form));
+      const data = picked
+        ? { email: picked.email, name: picked.name, phone: picked.phone, role: picked.role }
+        : formData(form);
+      if (!data.email) {
+        toast('Escolha uma pessoa já cadastrada ou informe o e-mail da pessoa nova.', 'error');
+        return false;
+      }
+      const res = await api.addMember(g.gid, data);
       toast(res.created
         ? (api.DEMO ? 'Conta criada (na demonstração a senha é demo123).' : 'Conta criada. A pessoa vai receber um e-mail para criar a senha (avise para olhar também o spam).')
-        : 'Pessoa incluída no grupo.');
+        : `${data.name || 'A pessoa'} agora faz parte de ${g.name}.`);
       onDone();
       return true;
     },
+  });
+
+  const form = m.form;
+  const found = form.querySelector('#found');
+  const pickedEl = form.querySelector('#picked');
+  const newPerson = form.querySelector('#new-person');
+  let people = null;
+  const fold = (x) => String(x || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const show = async () => {
+    const q = fold(form.querySelector('#find').value.trim());
+    if (people === null) {
+      found.innerHTML = spinner();
+      try { people = await api.knownPeople(g.gid); } catch (err) { found.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; return; }
+    }
+    const list = people.filter((p) => fold(`${p.name} ${p.email}`).includes(q)).slice(0, 8);
+    found.innerHTML = list.length ? list.map((p, i) => `
+      <button type="button" class="found-item" data-i="${people.indexOf(p)}">
+        <b>${esc(p.name)}</b> <span class="badge info">${esc(api.ROLE_NAMES[p.role])}</span><br>
+        <small class="muted">${esc(p.email)}</small></button>`).join('')
+      : `<p class="muted small">${people.length ? 'Ninguém encontrado com esse nome.' : 'Não há outras pessoas cadastradas que você possa adicionar.'}</p>`;
+  };
+  const choose = (p) => {
+    picked = p;
+    pickedEl.hidden = !p;
+    newPerson.hidden = Boolean(p);
+    found.hidden = Boolean(p);
+    if (p) {
+      pickedEl.innerHTML = `${icon('user')} <span><b>${esc(p.name)}</b> · ${esc(api.ROLE_NAMES[p.role])}<br>
+        <small class="muted">${esc(p.email)}</small></span>
+        <button type="button" class="btn small ghost" id="unpick">Trocar</button>`;
+      pickedEl.querySelector('#unpick').addEventListener('click', () => choose(null));
+    }
+  };
+  let timer;
+  form.querySelector('#find').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(show, 200); });
+  form.querySelector('#find').addEventListener('focus', () => { if (people === null) show(); });
+  found.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-i]');
+    if (b) choose(people[Number(b.dataset.i)]);
   });
 }
 
