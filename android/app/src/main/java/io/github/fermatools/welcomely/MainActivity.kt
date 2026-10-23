@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import android.provider.CalendarContract
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -128,6 +129,26 @@ class MainActivity : ComponentActivity() {
                     putExtra(Intent.EXTRA_TEXT, "$title\n$url")
                 }
                 startActivity(Intent.createChooser(send, getString(R.string.share_via)))
+            }
+        }
+
+        /** Abre o calendário do aparelho com o evento preenchido (a pessoa confirma lá). */
+        @JavascriptInterface
+        fun addToCalendar(title: String, beginMillis: Double, endMillis: Double, location: String, details: String) {
+            runOnUiThread {
+                val insert = Intent(Intent.ACTION_INSERT).apply {
+                    data = CalendarContract.Events.CONTENT_URI
+                    putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, beginMillis.toLong())
+                    putExtra(CalendarContract.EXTRA_EVENT_END_TIME, endMillis.toLong())
+                    putExtra(CalendarContract.Events.TITLE, title)
+                    putExtra(CalendarContract.Events.EVENT_LOCATION, location)
+                    putExtra(CalendarContract.Events.DESCRIPTION, details)
+                }
+                try {
+                    startActivity(insert)
+                } catch (e: ActivityNotFoundException) {
+                    Toast.makeText(this@MainActivity, R.string.no_calendar, Toast.LENGTH_LONG).show()
+                }
             }
         }
 

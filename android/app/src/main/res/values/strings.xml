@@ -11,4 +11,5 @@
     <string name="restore_default">Padrão</string>
     <string name="share_via">Compartilhar</string>
     <string name="no_app">Nenhum app para abrir este link.</string>
+    <string name="no_calendar">Nenhum app de calendário encontrado. Instale o Google Agenda.</string>
 </resources>

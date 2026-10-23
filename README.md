@@ -1,7 +1,6 @@
 # Welcomely
 
-Agendamento de atendimentos para quem atende (profissionais liberais, sacerdotes, consultores…),
-para suas secretárias e para os clientes. Funciona no navegador (PWA instalável) e como app Android.
+Agendamento de atendimentos e consultorias. Funciona no navegador (PWA instalável) e como app Android.
 
 **App:** https://fermatools.github.io/welcomely/
 
@@ -12,9 +11,13 @@ Um app **FERMATools** · fermatools@gmail.com · https://fermatools.github.io/
 | Perfil | O que faz |
 |---|---|
 | **Administrador** | Conta definida em `web/js/config.js` (só o hash do e-mail; vale com o e-mail confirmado). Cria grupos, cadastra qualquer pessoa em qualquer grupo e vê todas as agendas. |
-| **Atendente** | Agenda do dia/semana, confirma, remarca, marca concluído/falta; serviços, horários e bloqueios; regras de agendamento. Cadastra auxiliares e clientes nos seus grupos e vê só as pessoas desses grupos. Pode estar em vários grupos. |
+| **Atendente** | Agenda do dia/semana, confirma, remarca, marca concluído/falta; serviços; horários por regras de repetição (toda semana, a cada N semanas, n-ésimo dia do mês, data única, com validade) e bloqueios; regras de agendamento. Cadastra auxiliares e clientes nos seus grupos e vê só as pessoas desses grupos. Pode estar em vários grupos. |
 | **Auxiliar** (secretaria) | Gerencia a agenda dos atendentes dos seus grupos (agenda clientes com ou sem conta, encaixes, confirma, remarca). Cadastra clientes nos seus grupos. |
 | **Cliente** | Agenda só com atendentes dos seus grupos; acompanha e cancela os seus agendamentos. |
+
+Pedidos de clientes ficam **pendentes** (amarelo) até o atendente ou o auxiliar confirmar (verde), a menos
+que o atendente desligue a confirmação. Cada agendamento tem **Adicionar à agenda** (Google Agenda, arquivo
+.ics para Apple/Outlook ou, no app Android, o calendário do celular); a agenda exporta o dia/semana em .ics.
 
 Não há cadastro aberto: a pessoa é cadastrada por alguém (e recebe um e-mail para criar a própria senha) ou
 cria a conta de cliente pelo **link de convite** de um grupo (`#/convite/<grupo>`, na tela do grupo).
@@ -72,7 +75,7 @@ O GitHub Pages serve a branch `gh-pages` em https://fermatools.github.io/welcome
 ## Rodar localmente
 
 ```powershell
-.\servidor.bat        # http://localhost:5000  (servidor de arquivos do Python; Ctrl+C para parar)
+.\servidor.bat        # http://localhost:5000  (tools/servidor.py, sem cache; Ctrl+C para parar)
 ```
 
 `http://localhost:5000/?demo` força o modo demonstração mesmo com o Firebase configurado.

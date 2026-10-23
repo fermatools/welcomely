@@ -390,3 +390,16 @@ ul.plain { margin: 0; padding-left: 18px; }
 .demo-box h2 { font-size: 1.05rem; margin-bottom: 2px; }
 .demo-accounts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .note-inline { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); }
+
+/* ------------------------------------------------------------ regras de horário */
+.weekday-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-check { margin: 0; cursor: pointer; }
+.chip-check input { position: absolute; opacity: 0; pointer-events: none; }
+.chip-check span {
+  display: inline-block; min-width: 48px; padding: 8px 10px; text-align: center; font-weight: 600;
+  border: 1.5px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.chip-check input:checked + span { background: var(--brand); border-color: var(--brand); color: #fff; }
+.chip-check input:focus-visible + span { outline: 2px solid var(--brand); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chip-check input:checked + span { color: #062420; } }
+.calendar-options { display: grid; gap: 8px; margin: 8px 0 12px; }

@@ -18,7 +18,7 @@ import { ADMIN_EMAIL_SHA256 } from './config.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
   addDays, busyIntervals, computeSlots, DATE_RE, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, minutes, nowLocal,
-  overlaps, STATUSES, TIME_RE, validateAvailability,
+  overlaps, STATUSES, TIME_RE, upgradeRules, validateAvailability,
 } from './data/logic.js';
 
 export const DEMO = new URLSearchParams(location.search).has('demo') || !firebaseConfig.apiKey;
@@ -408,7 +408,7 @@ export async function deleteService(pid, sid) {
 
 export async function getAvailability(pid) {
   requireManager(pid);
-  return (await getProf(pid)).availability || [];
+  return upgradeRules((await getProf(pid)).availability);
 }
 
 export async function setAvailability(pid, rules) {

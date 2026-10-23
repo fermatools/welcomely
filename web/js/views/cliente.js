@@ -1,4 +1,5 @@
 import * as api from '../api.js';
+import { addToCalendar, eventFor } from '../calendar.js';
 import { canManage, go, saveRedirect, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, fmtRelativeDay, icon, nowStamp, parseDate,
@@ -214,7 +215,8 @@ export async function mine(el) {
         <a class="btn primary" href="#/buscar">${icon('plus')} Agendar</a></div>
       <h2 class="section-title">Próximos</h2>
       <div class="list">${upcoming.length ? upcoming.map((a) => apptCard(a,
-        `<button class="btn small ghost danger" data-cancel="${a.id}">Cancelar</button>
+        `<button class="btn small ghost" data-cal="${a.id}">${icon('calendar')} Adicionar à agenda</button>
+         <button class="btn small ghost danger" data-cancel="${a.id}">Cancelar</button>
          <a class="btn small ghost" href="#/p/${a.professional_id}">Agendar de novo</a>`)).join('')
         : empty('Você não tem atendimentos marcados.')}</div>
       ${past.length ? `<h2 class="section-title">Histórico</h2>
@@ -222,6 +224,11 @@ export async function mine(el) {
     </div>`;
 
   el.querySelector('.page').addEventListener('click', async (e) => {
+    const cal = e.target.closest('[data-cal]');
+    if (cal) {
+      addToCalendar(eventFor(appointments.find((a) => a.id === cal.dataset.cal), true));
+      return;
+    }
     const b = e.target.closest('[data-cancel]');
     if (!b) return;
     if (!await confirmDialog('Cancelar este agendamento?', { okLabel: 'Cancelar agendamento', danger: true })) return;

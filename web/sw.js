@@ -1,9 +1,9 @@
 // Service worker: guarda os arquivos do app para abrir rápido e funcionar com rede instável.
 // O Firebase (outro domínio) não passa por aqui. Ao mudar arquivos do app, incremente VERSION.
-const VERSION = 'welcomely-v6';
+const VERSION = 'welcomely-v7';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
-  'js/app.js', 'js/api.js', 'js/config.js', 'js/firebase-config.js', 'js/state.js', 'js/ui.js',
+  'js/app.js', 'js/api.js', 'js/calendar.js', 'js/config.js', 'js/firebase-config.js', 'js/state.js', 'js/ui.js',
   'js/data/logic.js', 'js/data/store-demo.js', 'js/data/store-firebase.js',
   'js/views/auth.js', 'js/views/cliente.js', 'js/views/agenda.js', 'js/views/gestao.js', 'js/views/conta.js', 'js/views/grupos.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',

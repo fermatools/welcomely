@@ -99,8 +99,7 @@ export function about(el) {
       <img src="icons/icon.svg" alt="" width="88" height="88">
       <h1>Welcomely</h1>
       <p class="muted">Versão ${APP_VERSION}</p>
-      <p>Agendamento de atendimentos para quem atende — profissionais liberais, sacerdotes, consultores —,
-        para suas secretárias e para os clientes.</p>
+      <p>Agendamento de atendimentos e consultorias.</p>
       <section class="card">
         <p>Desenvolvido por <b>${esc(DEVELOPER.name)}</b></p>
         <p><a href="mailto:${DEVELOPER.email}">${DEVELOPER.email}</a><br>

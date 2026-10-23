@@ -61,7 +61,7 @@ export function computeSlots({ prof, duration, day, dayDoc, blocks, enforce = tr
   const busy = busyIntervals(dayDoc, blocks, day);
   const step = prof.slot_interval_min || duration;
   const slots = new Set();
-  for (const rule of (prof.availability || []).filter((r) => r.weekday === weekday(day))) {
+  for (const rule of rulesForDay(prof.availability, day)) {
     const limit = minutes(rule.end_time);
     for (let t = minutes(rule.start_time); t + duration <= limit; t += step) {
       if (t >= earliest && !overlaps(t, t + duration, busy)) slots.add(hhmm(t));
@@ -70,28 +70,97 @@ export function computeSlots({ prof, duration, day, dayDoc, blocks, enforce = tr
   return [...slots].sort();
 }
 
-/** Valida a grade semanal: horários válidos, início < fim e sem sobreposição no mesmo dia. */
-export function validateAvailability(rules) {
-  if (!Array.isArray(rules)) throw new Error('Lista de horários inválida.');
-  const clean = rules.map((r) => {
-    if (!Number.isInteger(r.weekday) || r.weekday < 0 || r.weekday > 6) throw new Error('Dia da semana inválido.');
-    if (!TIME_RE.test(r.start_time) || !TIME_RE.test(r.end_time)) throw new Error('Horário inválido (use HH:MM).');
-    if (minutes(r.start_time) >= minutes(r.end_time)) throw new Error('O início deve ser antes do fim em cada intervalo.');
-    return { weekday: r.weekday, start_time: r.start_time, end_time: r.end_time };
-  });
-  for (let wd = 0; wd < 7; wd++) {
-    const day = clean.filter((r) => r.weekday === wd).sort((a, b) => a.start_time.localeCompare(b.start_time));
-    for (let i = 1; i < day.length; i++) {
-      if (minutes(day[i].start_time) < minutes(day[i - 1].end_time)) throw new Error('Há intervalos sobrepostos no mesmo dia.');
-    }
-  }
-  return clean.sort((a, b) => a.weekday - b.weekday || a.start_time.localeCompare(b.start_time));
+// ------------------------------------------------------------ regras de horário
+// Regra (como as repetições do Google Agenda):
+//   { repeat: 'weekly' | 'monthly' | 'once', days: [0..6], start_time, end_time,
+//     interval: 1..4 (weekly: a cada N semanas), week_of_month: 1..4 | -1 (monthly: 1ª..4ª ou última),
+//     date (once), from, until (opcionais, AAAA-MM-DD) }
+// Regras antigas { weekday, start_time, end_time } valem como "toda semana".
+export const REPEATS = ['weekly', 'monthly', 'once'];
+
+export function normalizeRule(r) {
+  if (!r.repeat) return { repeat: 'weekly', days: [r.weekday], start_time: r.start_time, end_time: r.end_time, interval: 1, from: '', until: '' };
+  return {
+    repeat: r.repeat, days: r.days || [], start_time: r.start_time, end_time: r.end_time,
+    interval: r.interval || 1, week_of_month: r.week_of_month ?? 1, date: r.date || '', from: r.from || '', until: r.until || '',
+  };
 }
 
-export const DEFAULT_AVAILABILITY = [0, 1, 2, 3, 4].flatMap((weekday) => [
-  { weekday, start_time: '09:00', end_time: '12:00' },
-  { weekday, start_time: '14:00', end_time: '18:00' },
-]);
+const mondayOf = (s) => addDays(s, -weekday(s));
+
+export function ruleApplies(rule, day) {
+  const r = normalizeRule(rule);
+  if (r.repeat === 'once') return r.date === day;
+  if ((r.from && day < r.from) || (r.until && day > r.until)) return false;
+  if (!r.days.includes(weekday(day))) return false;
+  if (r.repeat === 'weekly') {
+    if (r.interval <= 1) return true;
+    const weeks = Math.round((parseDate(mondayOf(day)) - parseDate(mondayOf(r.from || day))) / (7 * 864e5));
+    return weeks % r.interval === 0;
+  }
+  // monthly: n-ésima ocorrência do dia da semana no mês (ou a última)
+  const d = parseDate(day);
+  const n = Math.ceil(d.getDate() / 7);
+  const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  return r.week_of_month === -1 ? d.getDate() + 7 > daysInMonth : n === r.week_of_month;
+}
+
+/**
+ * Converte a grade antiga ({weekday, start_time, end_time}, um registro por dia) em regras semanais,
+ * juntando os dias que têm o mesmo horário. Regras no formato novo passam sem mudança.
+ */
+export function upgradeRules(rules) {
+  const out = [];
+  const merged = new Map();
+  for (const r of rules || []) {
+    if (r.repeat) { out.push(r); continue; }
+    const key = `${r.start_time}|${r.end_time}`;
+    if (!merged.has(key)) {
+      merged.set(key, { repeat: 'weekly', days: [], start_time: r.start_time, end_time: r.end_time, interval: 1, from: '', until: '' });
+      out.push(merged.get(key));
+    }
+    merged.get(key).days.push(r.weekday);
+  }
+  merged.forEach((r) => r.days.sort());
+  return out;
+}
+
+export const rulesForDay = (rules, day) => (rules || []).map(normalizeRule).filter((r) => ruleApplies(r, day));
+
+/** Valida e limpa a lista de regras de horário. Regras podem se sobrepor (vale a união). */
+export function validateAvailability(rules) {
+  if (!Array.isArray(rules)) throw new Error('Lista de horários inválida.');
+  return rules.map((raw) => {
+    const r = normalizeRule(raw);
+    if (!REPEATS.includes(r.repeat)) throw new Error('Repetição inválida.');
+    if (!TIME_RE.test(r.start_time) || !TIME_RE.test(r.end_time)) throw new Error('Horário inválido (use HH:MM).');
+    if (minutes(r.start_time) >= minutes(r.end_time)) throw new Error('O início deve ser antes do fim em cada regra.');
+    for (const k of ['date', 'from', 'until']) if (r[k] && !DATE_RE.test(r[k])) throw new Error('Data inválida.');
+    const out = { repeat: r.repeat, start_time: r.start_time, end_time: r.end_time };
+    if (r.repeat === 'once') {
+      if (!r.date) throw new Error('Informe a data.');
+      return { ...out, date: r.date };
+    }
+    const days = [...new Set(r.days)].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).sort();
+    if (!days.length) throw new Error('Escolha pelo menos um dia da semana.');
+    if (r.from && r.until && r.from > r.until) throw new Error('A data final deve ser depois da inicial.');
+    Object.assign(out, { days, from: r.from, until: r.until });
+    if (r.repeat === 'weekly') {
+      if (![1, 2, 3, 4].includes(r.interval)) throw new Error('Intervalo de semanas inválido.');
+      if (r.interval > 1 && !r.from) throw new Error('Para repetir a cada algumas semanas, informe a partir de quando.');
+      out.interval = r.interval;
+    } else {
+      if (![1, 2, 3, 4, -1].includes(r.week_of_month)) throw new Error('Semana do mês inválida.');
+      out.week_of_month = r.week_of_month;
+    }
+    return out;
+  });
+}
+
+export const DEFAULT_AVAILABILITY = [
+  { repeat: 'weekly', days: [0, 1, 2, 3, 4], start_time: '09:00', end_time: '12:00', interval: 1, from: '', until: '' },
+  { repeat: 'weekly', days: [0, 1, 2, 3, 4], start_time: '14:00', end_time: '18:00', interval: 1, from: '', until: '' },
+];
 
 export const DEFAULT_PROFILE = {
   title: '', bio: '', location: '',
