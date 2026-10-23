@@ -54,7 +54,7 @@ export async function login(el) {
   });
   el.querySelector('#forgot').addEventListener('click', (e) => busy(e.currentTarget, async () => {
     await api.resetPassword(form.elements.email.value);
-    toast('Enviamos um e-mail com o link para criar uma nova senha.');
+    toast('Enviamos um e-mail com o link para criar uma nova senha. Se não chegar, procure no spam.');
   }));
   el.querySelectorAll('[data-demo]').forEach((b) => b.addEventListener('click', () => busy(b, async () => {
     const { DEMO_PASSWORD } = await import('../data/store-demo.js');
