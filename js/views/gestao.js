@@ -2,8 +2,9 @@ import * as api from '../api.js';
 import { currentPid } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, spinner, timeOf, toast,
-  today, WEEKDAYS,
+  today,
 } from '../ui.js';
+import { normalizeRule, validateAvailability } from '../data/logic.js';
 import { bindPicker, noProfessional, profPicker } from './agenda.js';
 
 // ---------------------------------------------------------------- serviços
@@ -69,21 +70,50 @@ function serviceForm(pid, s, onDone) {
 
 // ------------------------------------------------- horários e bloqueios
 
+const SHORT_DAYS = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const ORDINAL = { 1: '1ª', 2: '2ª', 3: '3ª', 4: '4ª', '-1': 'última' };
+const fmtDate = (s) => (s ? fmtDay(s, { day: '2-digit', month: '2-digit', year: 'numeric' }) : '');
+const joinPt = (list) => (list.length > 1 ? `${list.slice(0, -1).join(', ')} e ${list[list.length - 1]}` : list[0] || '');
+
+/** Descrição da regra em português, como no Google Agenda. */
+function describeRule(raw) {
+  const r = normalizeRule(raw);
+  const time = `${r.start_time}–${r.end_time}`;
+  if (r.repeat === 'once') return { when: fmtDay(r.date), time, repeat: 'Só nesta data' };
+  const days = joinPt(r.days.map((d) => SHORT_DAYS[d]));
+  const repeat = r.repeat === 'monthly'
+    ? `Todo mês, na ${ORDINAL[r.week_of_month]} semana`
+    : r.interval > 1 ? `A cada ${r.interval} semanas` : 'Toda semana';
+  const range = r.from && r.until ? ` · de ${fmtDate(r.from)} a ${fmtDate(r.until)}`
+    : r.from ? ` · a partir de ${fmtDate(r.from)}` : r.until ? ` · até ${fmtDate(r.until)}` : '';
+  return { when: days, time, repeat: repeat + range };
+}
+
 export async function hours(el) {
   const pid = currentPid();
   if (!pid) return noProfessional(el);
   el.innerHTML = `<div class="page">${spinner()}</div>`;
   const [rules, blocks] = await Promise.all([api.getAvailability(pid), api.listBlocks(pid)]);
-  const week = WEEKDAYS.map((_, wd) => rules.filter((r) => r.weekday === wd).map((r) => ({ ...r })));
 
   el.innerHTML = `
     <div class="page">
       <div class="page-head"><h1>Horários</h1>${profPicker(pid)}</div>
       <section class="card">
-        <h2>Horários de atendimento</h2>
-        <p class="muted small">Intervalos em que os clientes podem agendar, em cada dia da semana.</p>
-        <div id="week" class="week-editor"></div>
-        <div class="form-foot"><button class="btn primary" id="save-week">Salvar horários</button></div>
+        <div class="section-head"><h2>Horários de atendimento</h2>
+          <button class="btn small" id="new-rule">${icon('plus')} Nova regra</button></div>
+        <p class="muted small">Quando os clientes podem agendar. Como no Google Agenda, cada regra pode repetir toda semana,
+          a cada algumas semanas, uma vez por mês ou valer só numa data.</p>
+        <div class="list">${rules.length ? rules.map((r, i) => {
+          const d = describeRule(r);
+          return `
+          <div class="block-row">
+            <div><b>${esc(d.when)}</b> · ${esc(d.time)}<br><small class="muted">${esc(d.repeat)}</small></div>
+            <div class="row-actions">
+              <button class="icon-btn" data-edit-rule="${i}" aria-label="Editar regra">${icon('edit')}</button>
+              <button class="icon-btn danger" data-del-rule="${i}" aria-label="Excluir regra">${icon('trash')}</button>
+            </div>
+          </div>`;
+        }).join('') : '<p class="muted small">Nenhuma regra: ninguém consegue agendar. Crie a primeira.</p>'}</div>
       </section>
       <section class="card">
         <div class="section-head"><h2>Bloqueios</h2>
@@ -98,51 +128,27 @@ export async function hours(el) {
     </div>`;
 
   const rerender = () => hours(el);
-  bindPicker(el, rerender);
-  const weekEl = el.querySelector('#week');
-  const renderWeek = () => {
-    weekEl.innerHTML = week.map((intervals, wd) => `
-      <div class="wd-row">
-        <b class="wd-name">${WEEKDAYS[wd]}</b>
-        <div class="wd-intervals">
-          ${intervals.length ? intervals.map((r, i) => `
-            <span class="interval">
-              <input type="time" value="${r.start_time}" data-wd="${wd}" data-i="${i}" data-k="start_time" aria-label="Início">
-              <span>às</span>
-              <input type="time" value="${r.end_time}" data-wd="${wd}" data-i="${i}" data-k="end_time" aria-label="Fim">
-              <button class="icon-btn" data-rm="${wd}:${i}" aria-label="Remover intervalo">${icon('x')}</button>
-            </span>`).join('') : '<span class="muted small">Sem atendimento</span>'}
-          <button class="btn small ghost" data-add="${wd}">${icon('plus')} Intervalo</button>
-        </div>
-      </div>`).join('');
+  const saveRules = async (list, message) => {
+    await api.setAvailability(pid, list);
+    toast(message);
+    rerender();
   };
-  weekEl.addEventListener('change', (e) => {
-    const { wd, i, k } = e.target.dataset;
-    if (k) week[wd][i][k] = e.target.value;
-  });
-  weekEl.addEventListener('click', (e) => {
-    const add = e.target.closest('[data-add]');
-    if (add) {
-      const list = week[add.dataset.add];
-      const last = list[list.length - 1];
-      list.push(last ? { start_time: last.end_time, end_time: last.end_time < '23:00' ? addHour(last.end_time) : '23:59' }
-        : { start_time: '09:00', end_time: '12:00' });
-      renderWeek();
-    }
-    const rm = e.target.closest('[data-rm]');
-    if (rm) {
-      const [wd, i] = rm.dataset.rm.split(':').map(Number);
-      week[wd].splice(i, 1);
-      renderWeek();
-    }
-  });
-  el.querySelector('#save-week').addEventListener('click', (e) => busy(e.currentTarget, async () => {
-    const payload = week.flatMap((list, wd) => list.map((r) => ({ weekday: wd, start_time: r.start_time, end_time: r.end_time })));
-    await api.setAvailability(pid, payload);
-    toast('Horários salvos.');
-  }));
+  bindPicker(el, rerender);
+  el.querySelector('#new-rule').addEventListener('click', () => ruleForm(null, (rule) => saveRules([...rules, rule], 'Regra criada.')));
   el.querySelector('#new-block').addEventListener('click', () => blockForm(pid, rerender));
   el.querySelector('.page').addEventListener('click', async (e) => {
+    const edit = e.target.closest('[data-edit-rule]');
+    if (edit) {
+      const i = Number(edit.dataset.editRule);
+      ruleForm(rules[i], (rule) => saveRules(rules.map((r, j) => (j === i ? rule : r)), 'Regra alterada.'));
+      return;
+    }
+    const delRule = e.target.closest('[data-del-rule]');
+    if (delRule) {
+      if (!await confirmDialog('Excluir esta regra de horário?', { okLabel: 'Excluir', danger: true })) return;
+      busy(delRule, () => saveRules(rules.filter((_, j) => j !== Number(delRule.dataset.delRule)), 'Regra excluída.'));
+      return;
+    }
     const del = e.target.closest('[data-del-block]');
     if (!del || !await confirmDialog('Remover este bloqueio?', { okLabel: 'Remover', danger: true })) return;
     busy(del, async () => {
@@ -151,11 +157,68 @@ export async function hours(el) {
       rerender();
     });
   });
-  renderWeek();
   return undefined;
 }
 
-const addHour = (hhmm) => `${String(Number(hhmm.slice(0, 2)) + 1).padStart(2, '0')}${hhmm.slice(2)}`;
+// Formulário de regra. Repetição: weekly-1..4 (toda semana / a cada N semanas), monthly, once.
+function ruleForm(raw, onSave) {
+  const r = raw ? normalizeRule(raw) : {
+    repeat: 'weekly', days: [0, 1, 2, 3, 4], start_time: '09:00', end_time: '12:00', interval: 1, week_of_month: 1,
+    date: today(), from: '', until: '',
+  };
+  const repeatValue = r.repeat === 'weekly' ? `weekly-${r.interval}` : r.repeat;
+  const options = [['weekly-1', 'Toda semana'], ['weekly-2', 'A cada 2 semanas'], ['weekly-3', 'A cada 3 semanas'],
+    ['weekly-4', 'A cada 4 semanas'], ['monthly', 'Uma vez por mês'], ['once', 'Só numa data']];
+  const m = modal({
+    title: raw ? 'Editar regra de horário' : 'Nova regra de horário',
+    submitLabel: 'Salvar',
+    body: `
+      <label>Repetição<select name="repeat">
+        ${options.map(([v, l]) => `<option value="${v}"${v === repeatValue ? ' selected' : ''}>${l}</option>`).join('')}
+      </select></label>
+      <div class="field" data-show="weekly monthly">
+        <span class="field-label">Dias da semana</span>
+        <div class="weekday-chips">${SHORT_DAYS.map((d, i) => `
+          <label class="chip-check"><input type="checkbox" name="day" value="${i}"${r.days.includes(i) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div>
+      </div>
+      <label data-show="monthly">Semana do mês<select name="week_of_month">
+        ${[1, 2, 3, 4, -1].map((w) => `<option value="${w}"${w === r.week_of_month ? ' selected' : ''}>${w === -1 ? 'Última' : `${w}ª`} semana do mês</option>`).join('')}
+      </select></label>
+      <label data-show="once">Data<input name="date" type="date" value="${r.date || today()}"></label>
+      <div class="row">
+        <label>Das<input name="start_time" type="time" required value="${r.start_time}"></label>
+        <label>Às<input name="end_time" type="time" required value="${r.end_time}"></label>
+      </div>
+      <div class="row" data-show="weekly monthly">
+        <label>A partir de <small class="muted">(opcional)</small><input name="from" type="date" value="${r.from}"></label>
+        <label>Até <small class="muted">(opcional)</small><input name="until" type="date" value="${r.until}"></label>
+      </div>
+      <p class="muted small" data-show="weekly-n">As semanas contam a partir da data inicial (se ficar em branco, a partir de hoje).</p>`,
+    onSubmit: async (form) => {
+      const [kind, n] = form.elements.repeat.value.split('-');
+      const days = [...form.querySelectorAll('[name=day]:checked')].map((c) => Number(c.value));
+      let from = form.elements.from.value;
+      if (kind === 'weekly' && Number(n) > 1 && !from) from = today();
+      const rule = validateAvailability([{
+        repeat: kind, days, start_time: form.elements.start_time.value, end_time: form.elements.end_time.value,
+        interval: Number(n) || 1, week_of_month: Number(form.elements.week_of_month.value),
+        date: form.elements.date.value, from, until: form.elements.until.value,
+      }])[0];
+      await onSave(rule);
+      return true;
+    },
+  });
+  const sync = () => {
+    const v = m.form.elements.repeat.value;
+    const kind = v.split('-')[0];
+    m.form.querySelectorAll('[data-show]').forEach((x) => {
+      const show = x.dataset.show.split(' ');
+      x.hidden = !(show.includes(kind) || (show.includes('weekly-n') && kind === 'weekly' && v !== 'weekly-1'));
+    });
+  };
+  m.form.elements.repeat.addEventListener('change', sync);
+  sync();
+}
 
 function fmtBlock(b) {
   const sd = b.starts_at.slice(0, 10);

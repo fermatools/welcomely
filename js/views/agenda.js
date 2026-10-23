@@ -1,4 +1,5 @@
 import * as api from '../api.js';
+import { addToCalendar, downloadIcs, eventFor } from '../calendar.js';
 import { currentPid, setPid, state } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, parseDate, spinner,
@@ -46,6 +47,7 @@ function actionsFor(a) {
     list.push(btn('concluido', 'Concluído'), btn('faltou', 'Faltou'), btn('remarcar', 'Remarcar'), btn('cancelado', 'Cancelar', 'ghost danger'));
   }
   if (['concluido', 'faltou'].includes(a.status)) list.push(btn('confirmado', 'Desfazer'));
+  if (['pendente', 'confirmado'].includes(a.status)) list.push(btn('agenda', `${icon('calendar')} Agenda`));
   if (a.status !== 'cancelado') list.push(btn('nota', `${icon('note')} Anotação`));
   return list.join('');
 }
@@ -102,6 +104,8 @@ export async function agenda(el) {
           <input type="date" id="goto" value="${view.date}" aria-label="Ir para a data">
         </div>
         <label class="check"><input type="checkbox" id="show-cancelled"${view.showCancelled ? ' checked' : ''}> Mostrar cancelados</label>
+        ${window.WelcomelyAndroid ? '' : `<button class="btn small ghost" id="export" title="Baixar os atendimentos para o Google Agenda, Apple, Outlook">
+          ${icon('calendar')} Exportar (.ics)</button>`}
       </div>
       <div id="pending"></div>
       <h2 class="range-title">${rangeTitle(from, to)} <small class="muted" id="count"></small></h2>
@@ -128,6 +132,7 @@ export async function agenda(el) {
     const act = b.dataset.act;
     if (act === 'remarcar') return appointmentForm(pid, appt, rerender);
     if (act === 'nota') return noteForm(appt, rerender);
+    if (act === 'agenda') return addToCalendar(eventFor(appt, false));
     if (act === 'cancelado' && !await confirmDialog(
       `${appt.status === 'pendente' ? 'Recusar' : 'Cancelar'} o atendimento de ${appt.client_name}?`,
       { okLabel: appt.status === 'pendente' ? 'Recusar' : 'Cancelar atendimento', danger: true })) return undefined;
@@ -141,6 +146,11 @@ export async function agenda(el) {
   let loaded = [];
   const [appointments, pending] = await Promise.all([api.agenda(pid, from, to), api.pending(pid)]);
   loaded = [...appointments, ...pending];
+  page.querySelector('#export')?.addEventListener('click', () => {
+    const active = appointments.filter((a) => ['pendente', 'confirmado'].includes(a.status));
+    if (!active.length) { toast('Não há atendimentos neste período.', 'error'); return; }
+    downloadIcs(active.map((a) => eventFor(a, false)), `welcomely-${from}${to !== from ? `-a-${to}` : ''}.ics`);
+  });
 
   if (pending.length) {
     page.querySelector('#pending').innerHTML = `
