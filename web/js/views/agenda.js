@@ -23,9 +23,11 @@ export function bindPicker(el, rerender) {
 
 // Auxiliar ainda sem vínculo com nenhum profissional
 export function noProfessional(el) {
-  el.innerHTML = `<div class="page narrow">${empty('Você ainda não está vinculado a nenhum profissional.', 'users')}
-    <div class="card note">Peça ao profissional para abrir <b>Equipe</b> no Welcomely e adicionar o seu e-mail:
-      <b>${esc(state.user.email)}</b>. Depois, recarregue esta página.</div></div>`;
+  el.innerHTML = `<div class="page narrow">${empty('Ainda não há agendas para você gerenciar.', 'users')}
+    <div class="card note">${state.user.role === 'admin'
+      ? 'Cadastre atendentes em <a href="#/grupos">Grupos</a>.'
+      : `Você passa a gerenciar a agenda dos atendentes dos grupos em que for incluído. Peça a um atendente ou ao
+        administrador para cadastrar o seu e-mail (<b>${esc(state.user.email)}</b>) num grupo.`}</div></div>`;
 }
 
 // ---------------------------------------------------------------- agenda

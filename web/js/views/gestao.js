@@ -1,5 +1,5 @@
 import * as api from '../api.js';
-import { currentPid, state } from '../state.js';
+import { currentPid } from '../state.js';
 import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, formData, icon, modal, spinner, timeOf, toast,
   today, WEEKDAYS,
@@ -203,48 +203,5 @@ function blockForm(pid, onDone) {
   });
   m.form.elements.start_date.addEventListener('change', (e) => {
     if (m.form.elements.end_date.value < e.target.value) m.form.elements.end_date.value = e.target.value;
-  });
-}
-
-// ---------------------------------------------------------------- equipe
-
-export async function team(el) {
-  const pid = state.user.id;
-  el.innerHTML = `<div class="page">${spinner()}</div>`;
-  const assistants = await api.listAssistants(pid);
-  el.innerHTML = `
-    <div class="page narrow">
-      <h1>Equipe</h1>
-      <p class="muted">Auxiliares (secretárias, assistentes) podem ver e organizar sua agenda, confirmar pedidos,
-        agendar clientes e bloquear horários. Peça para a pessoa criar uma conta como <b>auxiliar</b> e adicione o e-mail dela.</p>
-      <form class="card inline-form" id="add">
-        <label>E-mail do auxiliar<input name="email" type="email" required placeholder="nome@exemplo.com"></label>
-        <button class="btn primary" type="submit">${icon('plus')} Adicionar</button>
-      </form>
-      <div class="list">${assistants.length ? assistants.map((a) => `
-        <article class="card person">
-          <span class="avatar">${esc(a.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join(''))}</span>
-          <div><b>${esc(a.name)}</b><br><small class="muted">${esc(a.email)}${a.phone ? ` · ${esc(a.phone)}` : ''}</small></div>
-          <button class="btn small ghost danger" data-rm="${a.id}">Remover</button>
-        </article>`).join('') : empty('Nenhum auxiliar na equipe.', 'users')}</div>
-    </div>`;
-  const form = el.querySelector('#add');
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (!form.reportValidity()) return;
-    busy(form.querySelector('[type=submit]'), async () => {
-      await api.addAssistant(pid, form.elements.email.value);
-      toast('Auxiliar adicionado.');
-      team(el);
-    });
-  });
-  el.querySelector('.page').addEventListener('click', async (e) => {
-    const rm = e.target.closest('[data-rm]');
-    if (!rm || !await confirmDialog('Remover este auxiliar da equipe?', { okLabel: 'Remover', danger: true })) return;
-    busy(rm, async () => {
-      await api.removeAssistant(pid, rm.dataset.rm);
-      toast('Auxiliar removido.');
-      team(el);
-    });
   });
 }

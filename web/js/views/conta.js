@@ -3,11 +3,6 @@ import { APP_VERSION, DEVELOPER } from '../config.js';
 import { clearSession, go, loadMe, state } from '../state.js';
 import { busy, esc, formData, icon, toast } from '../ui.js';
 
-const ROLE_NAMES = { cliente: 'Cliente', profissional: 'Profissional', auxiliar: 'Auxiliar' };
-
-function bookingLink() {
-  return `${location.origin}${location.pathname}#/p/${state.user.id}`;
-}
 
 function profileSection(p) {
   return `
@@ -20,8 +15,6 @@ function profileSection(p) {
       <h3>Regras de agendamento</h3>
       <label class="check"><input type="checkbox" name="requires_confirmation"${p.requires_confirmation ? ' checked' : ''}>
         Confirmar cada pedido antes de valer (senão, o agendamento é confirmado na hora)</label>
-      <label class="check"><input type="checkbox" name="public"${p.public ? ' checked' : ''}>
-        Aparecer na busca de profissionais</label>
       <div class="row">
         <label>Antecedência mínima (horas)<input name="min_notice_hours" type="number" min="0" max="720" value="${p.min_notice_hours}"></label>
         <label>Agendar até (dias à frente)<input name="max_days_ahead" type="number" min="1" max="365" value="${p.max_days_ahead}"></label>
@@ -31,13 +24,7 @@ function profileSection(p) {
         <label>Intervalo entre horários (min)<input name="slot_interval_min" type="number" min="5" max="240" step="5" value="${p.slot_interval_min}"></label>
       </div>
       <div class="form-foot"><button class="btn primary" type="submit">Salvar perfil</button></div>
-    </form>
-    <section class="card">
-      <h2>Seu link de agendamento</h2>
-      <p class="muted small">Envie para seus clientes ou coloque nas redes sociais.</p>
-      <div class="share"><input readonly value="${esc(bookingLink())}" aria-label="Link de agendamento">
-        <button class="btn" id="share">${icon('share')} Compartilhar</button></div>
-    </section>`;
+    </form>`;
 }
 
 export async function account(el) {
@@ -46,11 +33,11 @@ export async function account(el) {
   el.innerHTML = `
     <div class="page narrow">
       <h1>Conta</h1>
-      <p class="muted">${esc(u.email)} · <span class="badge info">${ROLE_NAMES[u.role]}</span></p>
+      <p class="muted">${esc(u.email)} · <span class="badge info">${api.ROLE_NAMES[u.role]}</span></p>
       ${u.role === 'profissional' ? profileSection(state.profile) : ''}
-      ${u.role === 'auxiliar' ? `<section class="card"><h2>Profissionais que você atende</h2>
-        ${state.manages.length ? `<ul class="plain">${state.manages.map((p) => `<li><b>${esc(p.name)}</b>${p.title ? ` · ${esc(p.title)}` : ''}</li>`).join('')}</ul>`
-          : '<p class="muted small">Nenhum ainda. Peça ao profissional para adicionar o seu e-mail na Equipe dele.</p>'}</section>` : ''}
+      ${u.role !== 'admin' ? `<section class="card"><h2>Seus grupos</h2>
+        ${state.groups.length ? `<ul class="plain">${state.groups.map((g) => `<li><b>${esc(g.name)}</b></li>`).join('')}</ul>`
+          : '<p class="muted small">Nenhum ainda. Peça o link de convite ao seu atendente.</p>'}</section>` : ''}
       <form class="card" id="me">
         <h2>Dados pessoais</h2>
         <label>Nome<input name="name" required maxlength="120" value="${esc(u.name)}"></label>
@@ -92,20 +79,6 @@ export async function account(el) {
       await api.updateProfile(u.id, formData(profile));
       toast('Perfil salvo.');
     });
-  });
-
-  el.querySelector('#share')?.addEventListener('click', async () => {
-    const url = bookingLink();
-    try {
-      if (window.WelcomelyAndroid) window.WelcomelyAndroid.share(`Agende com ${u.name}`, url);
-      else if (navigator.share) await navigator.share({ title: `Agende com ${u.name}`, url });
-      else { await navigator.clipboard.writeText(url); toast('Link copiado.'); }
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        el.querySelector('.share input').select();
-        toast('Copie o link selecionado.');
-      }
-    }
   });
 
   el.querySelector('#demo-reset')?.addEventListener('click', async () => {

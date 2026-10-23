@@ -13,7 +13,8 @@ function profCard(p) {
       <span class="avatar">${esc(initials(p.name))}</span>
       <span class="prof-info"><b>${esc(p.name)}</b>
         ${p.title ? `<span>${esc(p.title)}</span>` : ''}
-        ${p.location ? `<small class="muted">${icon('pin')} ${esc(p.location)}</small>` : ''}</span>
+        ${p.location ? `<small class="muted">${icon('pin')} ${esc(p.location)}</small>` : ''}
+        ${p.groups?.length ? `<small class="muted">${icon('users')} ${esc(p.groups.join(' · '))}</small>` : ''}</span>
       ${icon('right', 'chev')}
     </a>`;
 }
@@ -36,7 +37,8 @@ export async function search(el) {
       const professionals = await api.listProfessionals(input.value);
       if (mine !== seq) return;
       results.innerHTML = professionals.length ? professionals.map(profCard).join('')
-        : empty('Nenhum profissional encontrado.', 'search');
+        : empty(state.groups.length || state.user.role === 'admin' ? 'Nenhum atendente encontrado.'
+          : 'Você ainda não faz parte de nenhum grupo. Peça o link de convite ao seu atendente.', 'search');
     } catch (err) { results.innerHTML = `<div class="card error-box">${esc(err.message)}</div>`; }
   };
   input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
@@ -62,7 +64,7 @@ export async function professionalPage(el, id) {
       </section>
       ${manager ? `<div class="card note">Você gerencia esta agenda. Para marcar um cliente, use a
         <a href="#/agenda">Agenda</a>.</div>` : ''}
-      ${!services.length ? empty('Este profissional ainda não tem serviços disponíveis.', 'list') : `
+      ${!services.length ? empty('Este atendente ainda não tem serviços disponíveis.', 'list') : `
       <section class="step">
         <h2><span class="num">1</span> Tipo de atendimento</h2>
         <div class="chips" id="services">

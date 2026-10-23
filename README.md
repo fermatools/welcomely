@@ -7,13 +7,17 @@ para suas secretárias e para os clientes. Funciona no navegador (PWA instaláve
 
 Um app **FERMATools** · fermatools@gmail.com · https://fermatools.github.io/
 
-## Perfis
+## Perfis e grupos
 
 | Perfil | O que faz |
 |---|---|
-| **Cliente** | Busca profissionais, escolhe o tipo de atendimento, o dia e um horário livre; acompanha e cancela os seus agendamentos. |
-| **Profissional** | Agenda do dia/semana, confirma pedidos, marca concluído/falta, remarca; cadastra serviços (com duração), horários semanais e bloqueios (férias etc.); define regras (confirmação manual, antecedência mínima, janela de agendamento, prazo de cancelamento); adiciona auxiliares; compartilha seu link de agendamento. |
-| **Auxiliar** (secretaria) | Gerencia a agenda dos profissionais que o adicionaram à equipe: agenda clientes (com ou sem conta, inclusive encaixes fora da grade), confirma, remarca, cancela, edita serviços, horários e bloqueios. |
+| **Administrador** | Conta definida em `web/js/config.js` (só o hash do e-mail; vale com o e-mail confirmado). Cria grupos, cadastra qualquer pessoa em qualquer grupo e vê todas as agendas. |
+| **Atendente** | Agenda do dia/semana, confirma, remarca, marca concluído/falta; serviços, horários e bloqueios; regras de agendamento. Cadastra auxiliares e clientes nos seus grupos e vê só as pessoas desses grupos. Pode estar em vários grupos. |
+| **Auxiliar** (secretaria) | Gerencia a agenda dos atendentes dos seus grupos (agenda clientes com ou sem conta, encaixes, confirma, remarca). Cadastra clientes nos seus grupos. |
+| **Cliente** | Agenda só com atendentes dos seus grupos; acompanha e cancela os seus agendamentos. |
+
+Não há cadastro aberto: a pessoa é cadastrada por alguém (e recebe um e-mail para criar a própria senha) ou
+cria a conta de cliente pelo **link de convite** de um grupo (`#/convite/<grupo>`, na tela do grupo).
 
 ## Arquitetura
 
@@ -26,7 +30,7 @@ web/                 app web (PWA) — é o que vai para o GitHub Pages
   js/data/logic.js     funções puras (cálculo de horários, sobreposição, datas)
   js/data/store-*.js   armazenamento: Firebase ou demonstração (localStorage)
   js/firebase-config.js  configuração do projeto Firebase (vazia = modo demonstração)
-  js/views/            telas: auth, cliente, agenda, gestao (serviços/horários/equipe), conta
+  js/views/            telas: auth, cliente, agenda, gestao (serviços/horários), grupos, conta
 firestore.rules      regras de segurança do Firestore (quem pode ler/escrever o quê)
 android/             app Android (Kotlin): abre o app web numa WebView
 tools/gen_icons.py   gera os ícones
@@ -39,8 +43,9 @@ o mesmo horário.
 
 ### Modo demonstração
 
-Enquanto `web/js/firebase-config.js` estiver vazio (ou com `?demo` no endereço), o app funciona sem
-Firebase: as contas e os agendamentos ficam só no navegador, com contas de exemplo (senha `demo123`).
+Com `?demo` no endereço (ou com `web/js/firebase-config.js` vazio), o app funciona sem Firebase: as contas e
+os agendamentos ficam só no navegador, com contas de exemplo de cada perfil (senha `demo123`).
+Ex.: https://fermatools.github.io/welcomely/?demo
 
 ## Configurar o Firebase (uma vez)
 

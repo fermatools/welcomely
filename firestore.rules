@@ -3,25 +3,56 @@ rules_version = '2';
 // Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
 // Sempre que este arquivo mudar, é preciso publicar de novo no console.
 //
-// Quem pode o quê:
-//   - Perfis de profissionais, serviços, bloqueios e horários ocupados (sem dados pessoais): leitura pública.
-//   - Agendamentos: só o profissional, seus auxiliares e o próprio cliente.
-//   - Cliente: cria agendamento para si (pendente/confirmado conforme o profissional) e pode cancelá-lo.
-//   - Profissional: tudo na própria agenda e equipe. Auxiliar: agenda, serviços, horários e bloqueios.
+// Perfis e grupos:
+//   - Administrador (e-mail cujo SHA-256 está abaixo, só com o e-mail confirmado): cria grupos, cadastra qualquer um, vê tudo.
+//   - Atendente (role 'profissional'): cadastra auxiliares e clientes nos seus grupos; vê os membros deles.
+//   - Auxiliar: cadastra clientes nos seus grupos; gerencia a agenda dos atendentes dos seus grupos.
+//   - Cliente: entra num grupo pelo link de convite; agenda só com atendentes dos seus grupos.
+// O vínculo auxiliar ↔ atendente fica em staff/{pid}_{aux}, com a lista dos grupos em comum.
 service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() { return request.auth != null; }
     function me() { return request.auth.uid; }
+    function userDoc(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function groupDoc(gid) { return /databases/$(database)/documents/groups/$(gid); }
+    function memberDoc(gid, uid) { return /databases/$(database)/documents/memberships/$(gid + '_' + uid); }
+    function staffDoc(pid, aux) { return /databases/$(database)/documents/staff/$(pid + '_' + aux); }
     function profDoc(pid) { return /databases/$(database)/documents/professionals/$(pid); }
     function apptDoc(id) { return /databases/$(database)/documents/appointments/$(id); }
+    function dayDoc(pid, day) { return /databases/$(database)/documents/professionals/$(pid)/days/$(day); }
 
-    // "After": vale também quando o documento do profissional é criado na mesma transação (cadastro).
-    function isOwner(pid) { return signedIn() && me() == pid && existsAfter(profDoc(pid)); }
-    function isManager(pid) {
-      return signedIn() && existsAfter(profDoc(pid))
-        && (me() == pid || me() in getAfter(profDoc(pid)).data.assistants);
+    // Só o hash do e-mail do administrador fica no código (o mesmo de web/js/config.js).
+    function isAdminEmail() {
+      return hashing.sha256(request.auth.token.email).toHexString().lower()
+        == '21a1e460a64509a23d74917084fb45317f941fba35b19e8d7d4e7de5a40325d0';
     }
+    function isAdmin() {
+      return signedIn() && request.auth.token.email_verified == true && isAdminEmail();
+    }
+    function myRole() { return get(userDoc(me())).data.role; }
+
+    // Participação em grupos
+    function isMemberIn(gid) { return signedIn() && exists(memberDoc(gid, me())); }
+    function roleIn(gid) { return get(memberDoc(gid, me())).data.role; }
+    function isStaffIn(gid) { return isMemberIn(gid) && roleIn(gid) in ['profissional', 'auxiliar']; }
+    // Quem pode pôr (ou tirar) alguém de perfil `role` no grupo
+    function canAddTo(gid, role) {
+      return isAdmin() || (isMemberIn(gid)
+        && ((roleIn(gid) == 'profissional' && role in ['auxiliar', 'cliente'])
+          || (roleIn(gid) == 'auxiliar' && role == 'cliente')));
+    }
+    // Quem pode criar a conta (users) de outra pessoa com este perfil
+    function canCreateRole(role) {
+      return isAdmin() || (myRole() == 'profissional' && role in ['auxiliar', 'cliente'])
+        || (myRole() == 'auxiliar' && role == 'cliente');
+    }
+
+    // Gestores da agenda de um atendente: ele, o admin e os auxiliares de um grupo em comum.
+    function isAuxOf(pid) {
+      return exists(staffDoc(pid, me())) && get(staffDoc(pid, me())).data.gids.size() > 0;
+    }
+    function isManager(pid) { return signedIn() && (me() == pid || isAdmin() || isAuxOf(pid)); }
 
     function verifiedEmail() { return signedIn() && request.auth.token.email_verified == true; }
     // O cliente do agendamento: pela conta ou pelo e-mail (confirmado) informado pela secretaria.
@@ -32,59 +63,98 @@ service cloud.firestore {
 
     // ---------------------------------------------------------------- contas
     match /users/{userId} {
-      allow read: if signedIn() && me() == userId;
-      allow create: if signedIn() && me() == userId
-        && request.resource.data.role in ['profissional', 'cliente', 'auxiliar']
-        && request.resource.data.email == request.auth.token.email;
-      allow update: if signedIn() && me() == userId
-        && request.resource.data.role == resource.data.role
-        && request.resource.data.email == resource.data.email;
+      allow read: if signedIn() && (me() == userId || isAdmin());
+      allow create: if signedIn() && request.resource.data.email is string && (
+          // cliente que se cadastrou pelo convite
+          (me() == userId && request.resource.data.role == 'cliente'
+            && request.resource.data.email == request.auth.token.email && request.resource.data.created_by == me())
+          // o administrador (e-mail fixo)
+          || (me() == userId && request.resource.data.role == 'admin'
+            && isAdminEmail() && request.resource.data.created_by == me())
+          // conta criada por quem cadastra
+          || (me() != userId && request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
+      allow update: if signedIn() && (me() == userId || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']);
     }
 
     // Busca de conta pelo e-mail (só leitura direta, nunca listagem).
     match /usersByEmail/{email} {
       allow get: if signedIn();
-      allow create: if signedIn() && email == request.auth.token.email
-        && request.resource.data.uid == me()
-        && request.resource.data.role == getAfter(/databases/$(database)/documents/users/$(me())).data.role;
-      allow update: if signedIn() && resource.data.uid == me()
-        && request.resource.data.uid == me() && request.resource.data.role == resource.data.role;
+      allow create: if signedIn() && request.resource.data.role == getAfter(userDoc(request.resource.data.uid)).data.role
+        && ((request.resource.data.uid == me() && email == request.auth.token.email)
+          || (request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
+      allow update: if signedIn() && (resource.data.uid == me() || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
     }
 
-    // ---------------------------------------------------------- profissionais
+    // ---------------------------------------------------------------- grupos
+    match /groups/{gid} {
+      allow get: if true;                 // o link de convite mostra o nome do grupo
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && request.resource.data.name is string;
+    }
+
+    match /memberships/{mid} {
+      allow read: if signedIn() && (resource.data.uid == me() || isAdmin() || isStaffIn(resource.data.gid)
+        || (isMemberIn(resource.data.gid) && resource.data.role == 'profissional'));
+      allow create: if signedIn()
+        && mid == request.resource.data.gid + '_' + request.resource.data.uid
+        && exists(groupDoc(request.resource.data.gid))
+        && request.resource.data.role == getAfter(userDoc(request.resource.data.uid)).data.role
+        && (canAddTo(request.resource.data.gid, request.resource.data.role)
+          // cliente entrando pelo convite
+          || (request.resource.data.uid == me() && request.resource.data.role == 'cliente'));
+      allow update: if signedIn() && (resource.data.uid == me() || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']);
+      allow delete: if signedIn() && canAddTo(resource.data.gid, resource.data.role);
+    }
+
+    // Vínculo auxiliar ↔ atendente: cada gravação acrescenta ou retira um grupo da lista.
+    match /staff/{id} {
+      allow read: if signedIn() && (resource.data.pid == me() || resource.data.aux == me() || isAdmin());
+      allow write: if signedIn() && staffChange(id);
+    }
+    function staffChange(id) {
+      let d = request.resource.data;
+      let before = resource == null ? [] : resource.data.gids;
+      let added = d.gids.removeAll(before);
+      let removed = before.removeAll(d.gids);
+      let g = added.size() == 1 ? added[0] : removed[0];
+      return id == d.pid + '_' + d.aux && d.keys().hasOnly(['pid', 'aux', 'gids'])
+        && (resource == null || (resource.data.pid == d.pid && resource.data.aux == d.aux))
+        && added.size() + removed.size() == 1
+        && (isAdmin() || (isMemberIn(g) && roleIn(g) == 'profissional'))
+        && (removed.size() == 1
+          || (getAfter(memberDoc(g, d.pid)).data.role == 'profissional'
+            && getAfter(memberDoc(g, d.aux)).data.role == 'auxiliar'));
+    }
+
+    // ---------------------------------------------------------- atendentes
     match /professionals/{pid} {
-      allow read: if true;
-      allow create: if signedIn() && me() == pid
-        && getAfter(/databases/$(database)/documents/users/$(pid)).data.role == 'profissional'
-        && request.resource.data.assistants.size() == 0;
-      // O profissional altera tudo; o auxiliar só a grade semanal.
-      allow update: if signedIn() && (me() == pid
-        || (me() in resource.data.assistants
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability'])));
+      allow read: if signedIn();
+      // Atendentes são cadastrados pelo administrador
+      allow create: if isAdmin() && getAfter(userDoc(pid)).data.role == 'profissional';
+      // O atendente e o admin alteram tudo; o auxiliar só a grade semanal.
+      allow update: if signedIn() && (me() == pid || isAdmin()
+        || (isAuxOf(pid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability'])));
 
       match /services/{sid} {
-        allow read: if true;
+        allow read: if signedIn();
         allow write: if isManager(pid);
       }
 
       match /blocks/{bid} {
-        allow read: if true;
+        allow read: if signedIn();
         allow write: if isManager(pid);
       }
 
-      match /team/{aid} {
-        allow read: if isManager(pid);
-        allow write: if isOwner(pid);
-      }
-
       match /clients/{cid} {
-        allow read: if isManager(pid);
-        allow write: if isManager(pid) || (signedIn() && cid == 'u_' + me());
+        allow read, write: if isManager(pid);
       }
 
       // Horários ocupados do dia: [{id, s, e, c}] (c = uid do cliente ou null). Sem nomes.
       match /days/{day} {
-        allow read: if true;
+        allow read: if signedIn();
         allow write: if isManager(pid) || clientDayChange(pid);
       }
     }
@@ -127,13 +197,16 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Cliente agenda só com atendente de um grupo em comum, na situação que o atendente definiu.
     function clientCreate(aid, a) {
       let prof = get(profDoc(a.professional_id)).data;
-      let dayDoc = getAfter(/databases/$(database)/documents/professionals/$(a.professional_id)/days/$(a.day));
+      let day = getAfter(dayDoc(a.professional_id, a.day));
       return signedIn() && a.client_id == me() && a.created_by == me()
+        && isMemberIn(a.gid) && roleIn(a.gid) == 'cliente'
+        && get(memberDoc(a.gid, a.professional_id)).data.role == 'profissional'
         && ((prof.requires_confirmation == true && a.status == 'pendente')
           || (prof.requires_confirmation == false && a.status == 'confirmado'))
-        && dayDoc.data.busy.hasAny([{ 'id': aid, 's': a.start, 'e': a.end, 'c': me() }]);
+        && day.data.busy.hasAny([{ 'id': aid, 's': a.start, 'e': a.end, 'c': me() }]);
     }
   }
 }
