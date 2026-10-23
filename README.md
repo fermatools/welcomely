@@ -18,6 +18,8 @@ Um app **FERMATools** · fermatools@gmail.com · https://fermatools.github.io/
 Pedidos de clientes ficam **pendentes** (amarelo) até o atendente ou o auxiliar confirmar (verde), a menos
 que o atendente desligue a confirmação. Cada agendamento tem **Adicionar à agenda** (Google Agenda, arquivo
 .ics para Apple/Outlook ou, no app Android, o calendário do celular); a agenda exporta o dia/semana em .ics.
+Ao confirmar, remarcar, cancelar ou agendar pela agenda, o app oferece **avisar o cliente** por e-mail ou
+WhatsApp: abre o e-mail/WhatsApp de quem está usando, com a mensagem pronta (inclui o link do Google Agenda).
 
 Não há cadastro aberto: a pessoa é cadastrada por alguém (e recebe um e-mail para criar a própria senha) ou
 cria a conta de cliente pelo **link de convite** de um grupo (`#/convite/<grupo>`, na tela do grupo).
