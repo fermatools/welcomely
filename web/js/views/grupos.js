@@ -22,7 +22,8 @@ function verificationCard() {
     <section class="card note">
       <h2>Confirme o seu e-mail</h2>
       <p>A conta de administrador só funciona depois que o e-mail <b>${esc(state.user.email)}</b> for confirmado.
-        Abra a mensagem que enviamos e clique no link; depois toque em "Já confirmei".</p>
+        Abra a mensagem que enviamos (se não estiver na caixa de entrada, procure no <b>spam</b>) e clique no
+        link; depois toque em "Já confirmei".</p>
       <div class="form-foot">
         <button class="btn ghost" id="resend">Reenviar e-mail</button>
         <button class="btn primary" id="verified">Já confirmei</button>
@@ -132,12 +133,12 @@ function addForm(g, onDone) {
       <label>E-mail<input name="email" type="email" required autocomplete="off"></label>
       <label>Nome completo<input name="name" maxlength="120" autocomplete="off"></label>
       <label>Telefone / WhatsApp <small class="muted">(opcional)</small><input name="phone" type="tel" autocomplete="off"></label>
-      <p class="muted small">Se a pessoa ainda não tiver conta, ela recebe um e-mail para criar a própria senha.
-        Se já tiver, só passa a fazer parte do grupo.</p>`,
+      <p class="muted small">Se a pessoa ainda não tiver conta, ela recebe um e-mail para criar a própria senha
+        (pode cair no spam). Se já tiver, só passa a fazer parte do grupo.</p>`,
     onSubmit: async (form) => {
       const res = await api.addMember(g.gid, formData(form));
       toast(res.created
-        ? (api.DEMO ? 'Conta criada (na demonstração a senha é demo123).' : 'Conta criada. A pessoa vai receber um e-mail para criar a senha.')
+        ? (api.DEMO ? 'Conta criada (na demonstração a senha é demo123).' : 'Conta criada. A pessoa vai receber um e-mail para criar a senha (avise para olhar também o spam).')
         : 'Pessoa incluída no grupo.');
       onDone();
       return true;
