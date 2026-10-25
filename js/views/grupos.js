@@ -98,7 +98,8 @@ export async function detail(el, gid) {
         <div class="list">${byRole(r).length ? byRole(r).map((m) => `
           <article class="card person">
             <span class="avatar">${esc(initials(m.name))}</span>
-            <div><b>${esc(m.name)}</b><br><small class="muted">${esc(m.email)}${m.phone ? ` · ${esc(m.phone)}` : ''}</small></div>
+            <div><b>${esc(m.name)}</b>${m.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>
+              <small class="muted">${esc([m.email, m.phone].filter(Boolean).join(' · '))}</small></div>
             ${g.canAdd.includes(m.role) && m.uid !== state.user.id
               ? `<button class="btn small ghost danger" data-rm="${esc(m.uid)}" data-name="${esc(m.name)}">Retirar</button>` : ''}
           </article>`).join('') : '<p class="muted small">Ninguém ainda.</p>'}</div>`).join('')}
@@ -140,22 +141,30 @@ function addForm(g, onDone) {
               ${icon(r === 'cliente' ? 'calendar' : r === 'auxiliar' ? 'users' : 'user')}
               <span><b>${api.ROLE_NAMES[r]}</b></span></label>`).join('')}
         </fieldset>
-        <label>E-mail<input name="email" type="email" autocomplete="off"></label>
+        ${g.canAdd.includes('cliente') ? `<label class="check" id="no-account-row"><input type="checkbox" name="no_account">
+          Cliente sem conta: só nome e contato, para agendar pela secretaria (não recebe e-mail nem acessa o app)</label>` : ''}
+        <label>E-mail <small class="muted" id="email-hint" hidden>(se não tiver telefone)</small><input name="email" type="email" autocomplete="off"></label>
         <label>Nome completo<input name="name" maxlength="120" autocomplete="off"></label>
-        <label>Telefone / WhatsApp <small class="muted">(opcional)</small><input name="phone" type="tel" autocomplete="off"></label>
-        <p class="muted small">Quem ainda não tem conta recebe um e-mail para criar a própria senha (pode cair no spam).
+        <label>Telefone / WhatsApp <small class="muted" id="phone-hint">(opcional)</small><input name="phone" type="tel" autocomplete="off"></label>
+        <p class="muted small" id="account-note">Quem ainda não tem conta recebe um e-mail para criar a própria senha (pode cair no spam).
           Se o e-mail já tiver conta, a pessoa só passa a fazer parte do grupo.</p>
+        <p class="muted small" id="contact-note" hidden>Informe o telefone ou o e-mail (pelo menos um).</p>
       </div>`,
     onSubmit: async (form) => {
       const data = picked
-        ? { email: picked.email, name: picked.name, phone: picked.phone, role: picked.role }
+        ? { email: picked.email, name: picked.name, phone: picked.phone, role: picked.role, no_account: picked.no_account, cid: picked.no_account ? picked.uid : undefined }
         : formData(form);
-      if (!data.email) {
+      if (!picked && data.role !== 'cliente') data.no_account = false;
+      if (!data.no_account && !data.email) {
         toast('Escolha uma pessoa já cadastrada ou informe o e-mail da pessoa nova.', 'error');
         return false;
       }
+      if (data.no_account && !data.email && !data.phone) {
+        toast('Informe o telefone ou o e-mail do cliente.', 'error');
+        return false;
+      }
       const res = await api.addMember(g.gid, data);
-      toast(res.created
+      toast(res.contact ? `${data.name} (sem conta) agora faz parte de ${g.name}.` : res.created
         ? (api.DEMO ? 'Conta criada (na demonstração a senha é demo123).' : 'Conta criada. A pessoa vai receber um e-mail para criar a senha (avise para olhar também o spam).')
         : `${data.name || 'A pessoa'} agora faz parte de ${g.name}.`);
       onDone();
@@ -175,11 +184,11 @@ function addForm(g, onDone) {
       found.innerHTML = spinner();
       try { people = await api.knownPeople(g.gid); } catch (err) { found.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; return; }
     }
-    const list = people.filter((p) => fold(`${p.name} ${p.email}`).includes(q)).slice(0, 8);
+    const list = people.filter((p) => fold(`${p.name} ${p.email} ${p.phone}`).includes(q)).slice(0, 8);
     found.innerHTML = list.length ? list.map((p, i) => `
       <button type="button" class="found-item" data-i="${people.indexOf(p)}">
-        <b>${esc(p.name)}</b> <span class="badge info">${esc(api.ROLE_NAMES[p.role])}</span><br>
-        <small class="muted">${esc(p.email)}</small></button>`).join('')
+        <b>${esc(p.name)}</b> <span class="badge info">${esc(api.ROLE_NAMES[p.role])}</span>${p.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>
+        <small class="muted">${esc([p.email, p.phone].filter(Boolean).join(' · '))}</small></button>`).join('')
       : `<p class="muted small">${people.length ? 'Ninguém encontrado com esse nome.' : 'Não há outras pessoas cadastradas que você possa adicionar.'}</p>`;
   };
   const choose = (p) => {
@@ -188,12 +197,24 @@ function addForm(g, onDone) {
     newPerson.hidden = Boolean(p);
     found.hidden = Boolean(p);
     if (p) {
-      pickedEl.innerHTML = `${icon('user')} <span><b>${esc(p.name)}</b> · ${esc(api.ROLE_NAMES[p.role])}<br>
-        <small class="muted">${esc(p.email)}</small></span>
+      pickedEl.innerHTML = `${icon('user')} <span><b>${esc(p.name)}</b> · ${esc(api.ROLE_NAMES[p.role])}${p.no_account ? ' (sem conta)' : ''}<br>
+        <small class="muted">${esc([p.email, p.phone].filter(Boolean).join(' · '))}</small></span>
         <button type="button" class="btn small ghost" id="unpick">Trocar</button>`;
       pickedEl.querySelector('#unpick').addEventListener('click', () => choose(null));
     }
   };
+  const syncNoAccount = () => {
+    const role = form.querySelector('[name=role]:checked')?.value;
+    const row = form.querySelector('#no-account-row');
+    if (row) row.hidden = role !== 'cliente';
+    const contact = role === 'cliente' && form.elements.no_account?.checked;
+    form.querySelector('#email-hint').hidden = !contact;
+    form.querySelector('#phone-hint').textContent = contact ? '(se não tiver e-mail)' : '(opcional)';
+    form.querySelector('#account-note').hidden = contact;
+    form.querySelector('#contact-note').hidden = !contact;
+  };
+  form.addEventListener('change', (e) => { if (['role', 'no_account'].includes(e.target.name)) syncNoAccount(); });
+  syncNoAccount();
   let timer;
   form.querySelector('#find').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(show, 200); });
   form.querySelector('#find').addEventListener('focus', () => { if (people === null) show(); });
