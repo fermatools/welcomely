@@ -60,7 +60,9 @@ Ex.: https://fermatools.github.io/welcomely/?demo
 4. **Firestore → Regras**: colar o conteúdo de `firestore.rules` e **Publicar** (repetir sempre que o arquivo mudar).
 5. **Configurações do projeto** → Seus apps → **Web** (`</>`) → registrar → copiar o `firebaseConfig`
    para `web/js/firebase-config.js`.
-6. (Recomendado) Google Cloud Console → APIs e serviços → Credenciais → a chave de API do navegador →
+6. (Login com Google) **Authentication → Método de login → Google → Ativar** (e-mail de suporte: o do projeto) e
+   **Authentication → Configurações → Domínios autorizados → Adicionar** `fermatools.github.io`.
+7. (Recomendado) Google Cloud Console → APIs e serviços → Credenciais → a chave de API do navegador →
    restringir por referenciador HTTP: `fermatools.github.io/*` e `localhost:5000/*`.
 
 Se o Firestore pedir um índice ao listar agendamentos, a mensagem de erro no console do navegador traz o

@@ -138,6 +138,34 @@ export async function login({ email, password }) {
   await store.signIn(text(email, 200).toLowerCase(), String(password || ''));
 }
 
+/**
+ * Entrar com a conta Google. Quem já foi cadastrado com esse e-mail entra na mesma conta.
+ * Na primeira vez, só cria a conta pelo link de convite (cliente) ou se for o administrador.
+ */
+export async function loginWithGoogle(invite) {
+  const g = await store.signInWithGoogle();
+  if (await store.get(`users/${g.uid}`)) return;
+  const email = g.email;
+  const asAdmin = await isAdminEmail(email.toLowerCase());
+  const group = invite ? await getInvite(invite).catch(() => null) : null;
+  if (!asAdmin && !group) {
+    if (g.isNew) await store.deleteCurrentUser().catch(() => {});
+    await store.signOut();
+    fail('Esta conta Google ainda não tem acesso ao Welcomely. O acesso é por convite: peça o link ao seu atendente.', 403);
+  }
+  const role = asAdmin ? 'admin' : 'cliente';
+  const name = text(g.name || email.split('@')[0], 120);
+  await store.tx(async (t) => {
+    t.set(`users/${g.uid}`, { name, email, phone: '', role, created_by: g.uid, created_at: nowIso() });
+    t.set(`usersByEmail/${email}`, { uid: g.uid, name, role, created_by: g.uid });
+    if (group && !asAdmin) {
+      t.set(`memberships/${group.gid}_${g.uid}`, {
+        gid: group.gid, uid: g.uid, role: 'cliente', name, email, phone: '', group_name: group.name, added_by: g.uid, added_at: nowIso(),
+      });
+    }
+  });
+}
+
 export async function logout() {
   session = null;
   await store.signOut();

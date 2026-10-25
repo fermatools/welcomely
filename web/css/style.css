@@ -417,3 +417,7 @@ ul.plain { margin: 0; padding-left: 18px; }
 #picked span { flex: 1; }
 .divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .85rem; margin: 16px 0 12px; }
 .divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+
+/* ------------------------------------------------------------ login com Google */
+.google-btn { gap: 10px; margin-bottom: 4px; }
+.google-g { width: 20px; height: 20px; flex: none; }
