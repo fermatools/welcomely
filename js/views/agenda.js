@@ -1,5 +1,6 @@
 import * as api from '../api.js';
 import { addToCalendar, downloadIcs, eventFor } from '../calendar.js';
+import { whatsappDigits } from '../data/logic.js';
 import { notifyClient } from '../notify.js';
 import { currentPid, setPid, state } from '../state.js';
 import {
@@ -35,9 +36,8 @@ export function noProfessional(el) {
 // ---------------------------------------------------------------- agenda
 
 const whatsapp = (phone) => {
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length < 8) return '';
-  return `https://wa.me/${digits.length <= 11 ? `55${digits}` : digits}`;
+  const n = whatsappDigits(phone);
+  return n ? `https://wa.me/${n}` : '';
 };
 
 function actionsFor(a) {

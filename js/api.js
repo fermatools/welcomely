@@ -18,7 +18,7 @@ import { ADMIN_EMAIL_SHA256 } from './config.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
   addDays, busyIntervals, computeSlots, DATE_RE, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, minutes, nowLocal,
-  overlaps, STATUSES, TIME_RE, upgradeRules, validateAvailability,
+  overlaps, phoneKey, phoneMatches, STATUSES, TIME_RE, upgradeRules, validateAvailability,
 } from './data/logic.js';
 
 export const DEMO = new URLSearchParams(location.search).has('demo') || !firebaseConfig.apiKey;
@@ -317,7 +317,7 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
     if (!phone && !email) fail('Informe o telefone ou o e-mail do cliente.');
     if (email && !EMAIL_RE.test(email)) fail('E-mail inválido.');
     const members = await store.list('memberships', [['gid', '==', gid]]);
-    const dup = members.find((m) => (email && m.email === email) || (!email && phone && m.phone === phone && m.no_account));
+    const dup = members.find((m) => (email && m.email === email) || (phone && phoneKey(m.phone) === phoneKey(phone)));
     if (dup) fail(`${dup.name} já está no grupo com este ${email ? 'e-mail' : 'telefone'}.`);
     const contactId = cid || `c_${store.newId('memberships')}`;
     await store.set(`memberships/${gid}_${contactId}`, {
@@ -560,8 +560,8 @@ export async function clientSuggestions(pid, q) {
   ]);
   const seen = new Set();
   return [...groupLists.flat().map((m) => ({ name: m.name, phone: m.phone, email: m.email, last: '' })), ...past]
-    .filter((c) => fold(`${c.name} ${c.phone} ${c.email}`).includes(term))
-    .filter((c) => { const k = c.email || `${c.name}|${c.phone}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .filter((c) => fold(`${c.name} ${c.email}`).includes(term) || phoneMatches(c.phone, term))
+    .filter((c) => { const k = c.email || `${fold(c.name)}|${phoneKey(c.phone)}`; if (seen.has(k)) return false; seen.add(k); return true; })
     .slice(0, 20);
 }
 
@@ -578,7 +578,7 @@ export async function myAppointments() {
 
 const clientKey = (clientId, name, phone) => (clientId
   ? `u_${clientId}`
-  : `${fold(name).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${String(phone).replace(/\D/g, '').slice(-8)}`);
+  : `${fold(name).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${phoneKey(phone).slice(-8)}`);
 
 export async function createAppointment(data) {
   const uid = requireUid();
