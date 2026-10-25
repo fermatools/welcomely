@@ -1,4 +1,5 @@
 import * as api from '../api.js';
+import { phoneMatches } from '../data/logic.js';
 import { go, loadMe, saveRedirect, state } from '../state.js';
 import { busy, confirmDialog, empty, esc, formData, icon, modal, spinner, toast } from '../ui.js';
 
@@ -184,7 +185,7 @@ function addForm(g, onDone) {
       found.innerHTML = spinner();
       try { people = await api.knownPeople(g.gid); } catch (err) { found.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; return; }
     }
-    const list = people.filter((p) => fold(`${p.name} ${p.email} ${p.phone}`).includes(q)).slice(0, 8);
+    const list = people.filter((p) => fold(`${p.name} ${p.email}`).includes(q) || phoneMatches(p.phone, q)).slice(0, 8);
     found.innerHTML = list.length ? list.map((p, i) => `
       <button type="button" class="found-item" data-i="${people.indexOf(p)}">
         <b>${esc(p.name)}</b> <span class="badge info">${esc(api.ROLE_NAMES[p.role])}</span>${p.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>

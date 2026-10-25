@@ -18,6 +18,34 @@ export function nowLocal() {
   return { date: isoDate(d), min: d.getHours() * 60 + d.getMinutes() };
 }
 
+// ------------------------------------------------------------ telefones
+/**
+ * Chave para comparar telefones escritos de jeitos diferentes: só dígitos, sem o +55 do Brasil e sem
+ * zeros à esquerda. Ex.: "(21) 99999-9999", "+55 21 99999-9999" e "021999999999" → "21999999999".
+ */
+export function phoneKey(phone) {
+  let d = String(phone || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (d.startsWith('55') && d.length >= 12) d = d.slice(2);
+  return d;
+}
+
+/** Busca por parte de um telefone, em qualquer formato ("+55 21 9999" também acha "(21) 99999-0000"). */
+export function phoneMatches(phone, query) {
+  const q = String(query || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (q.length < 3) return false;
+  const key = phoneKey(phone);
+  return key.includes(q) || (q.startsWith('55') && key.startsWith(q.slice(2)));
+}
+
+/** Número para o WhatsApp (wa.me): com o código do país; sem código, assume Brasil. */
+export function whatsappDigits(phone) {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8) return '';
+  if (raw.startsWith('+') && !digits.startsWith('55')) return digits;   // outro país
+  return `55${phoneKey(raw)}`;
+}
+
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 

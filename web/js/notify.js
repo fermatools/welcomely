@@ -2,6 +2,7 @@
 // Sem servidor de envio: abre o e-mail (ou o WhatsApp) de quem está usando o app, com a mensagem pronta;
 // a pessoa só confere e toca em Enviar.
 import { eventFor, googleUrl } from './calendar.js';
+import { whatsappDigits } from './data/logic.js';
 import { esc, fmtDay, icon, modal } from './ui.js';
 
 const HEADLINE = {
@@ -29,19 +30,13 @@ export function messageFor(a, kind) {
   };
 }
 
-const waNumber = (phone) => {
-  const digits = String(phone || '').replace(/\D/g, '');
-  if (digits.length < 8) return '';
-  return digits.length <= 11 ? `55${digits}` : digits;   // sem DDI: Brasil
-};
-
 export function mailtoUrl(a, kind) {
   const { subject, body } = messageFor(a, kind);
   return `mailto:${encodeURIComponent(a.client_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.replace(/\n/g, '\r\n'))}`;
 }
 
 export function whatsappUrl(a, kind) {
-  const n = waNumber(a.client_phone);
+  const n = whatsappDigits(a.client_phone);
   return n ? `https://wa.me/${n}?text=${encodeURIComponent(messageFor(a, kind).body)}` : '';
 }
 
