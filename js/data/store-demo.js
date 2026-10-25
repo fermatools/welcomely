@@ -162,6 +162,10 @@ export function createDemoStore() {
       notify();
     },
     async signOut() { db.session = null; save(); notify(); },
+    async signInWithGoogle() {
+      throw new Error('Na demonstração não há login com Google. Use as contas de exemplo.');
+    },
+    async deleteCurrentUser() {},
     async createAccount(email) {
       await delay();
       if (db.accounts[email]) throw new Error('Já existe uma conta com este e-mail.');

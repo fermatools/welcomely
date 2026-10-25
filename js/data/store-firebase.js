@@ -2,8 +2,9 @@
 // Mesma interface de store-demo.js; a lógica do app fica em data/api.js.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
-  createUserWithEmailAndPassword, EmailAuthProvider, getAuth, onAuthStateChanged, reauthenticateWithCredential,
-  sendEmailVerification, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updatePassword,
+  createUserWithEmailAndPassword, EmailAuthProvider, getAdditionalUserInfo, getAuth, GoogleAuthProvider,
+  onAuthStateChanged, reauthenticateWithCredential, sendEmailVerification, sendPasswordResetEmail,
+  signInWithEmailAndPassword, signInWithPopup, signOut, updatePassword,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
   collection, deleteDoc, doc, getDoc, getDocs, getFirestore, limit, query, runTransaction, setDoc, updateDoc, where,
@@ -18,6 +19,12 @@ const AUTH_ERRORS = {
   'auth/weak-password': 'A senha deve ter pelo menos 6 caracteres.',
   'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente de novo.',
   'auth/network-request-failed': 'Sem conexão. Verifique sua internet.',
+  'auth/popup-blocked': 'O navegador bloqueou a janela do Google. Permita pop-ups para este site e tente de novo.',
+  'auth/popup-closed-by-user': 'A janela do Google foi fechada antes de terminar.',
+  'auth/cancelled-popup-request': 'A janela do Google foi fechada antes de terminar.',
+  'auth/unauthorized-domain': 'Este endereço ainda não está autorizado no Firebase (Authentication → Configurações → Domínios autorizados).',
+  'auth/operation-not-allowed': 'O login com Google ainda não foi ativado no Firebase.',
+  'auth/account-exists-with-different-credential': 'Esta conta usa e-mail e senha. Entre com a senha (ou use "Esqueci minha senha").',
   'permission-denied': 'Sem permissão para esta operação.',
   unavailable: 'Sem conexão com o servidor. Verifique sua internet.',
 };
@@ -70,6 +77,18 @@ export function createFirebaseStore(config) {
       return cred.user.uid;
     }),
     signIn: wrap(async (email, password) => { await signInWithEmailAndPassword(auth, email, password); }),
+    // Janela do Google (popup). Devolve os dados da conta e se ela acabou de ser criada no Firebase.
+    signInWithGoogle: wrap(async () => {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const cred = await signInWithPopup(auth, provider);
+      return {
+        uid: cred.user.uid, email: cred.user.email, name: cred.user.displayName || '',
+        isNew: Boolean(getAdditionalUserInfo(cred)?.isNewUser),
+      };
+    }),
+    // Desfaz uma conta recém-criada pelo Google que não tem acesso ao app.
+    deleteCurrentUser: wrap(async () => { await auth.currentUser?.delete(); }),
     signOut: wrap(() => signOut(auth)),
     // Cria a conta de outra pessoa (senha aleatória) numa instância secundária, sem deslogar quem cadastra.
     // A pessoa define a própria senha pelo e-mail de redefinição.
