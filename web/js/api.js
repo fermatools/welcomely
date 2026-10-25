@@ -267,12 +267,15 @@ export async function knownPeople(gid) {
   if (!allowed.length) return [];
   const inGroup = new Set((await store.list('memberships', [['gid', '==', gid]])).map((m) => m.uid));
   let people;
+  const fromMember = (m) => ({ uid: m.uid, name: m.name, email: m.email || '', phone: m.phone || '', role: m.role, no_account: Boolean(m.no_account) });
   if (isAdmin()) {
-    people = (await store.list('users')).map((u) => ({ uid: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role }));
+    const [users, contacts] = await Promise.all([store.list('users'), store.list('memberships', [['no_account', '==', true]])]);
+    people = users.map((u) => ({ uid: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role, no_account: false }))
+      .concat(contacts.map(fromMember));
   } else {
     const others = session.groups.filter((g) => g.gid !== gid && ['profissional', 'auxiliar'].includes(g.role));
     const lists = await Promise.all(others.map((g) => store.list('memberships', [['gid', '==', g.gid]])));
-    people = lists.flat().map((m) => ({ uid: m.uid, name: m.name, email: m.email, phone: m.phone || '', role: m.role }));
+    people = lists.flat().map(fromMember);
   }
   const seen = new Set();
   return people
@@ -296,20 +299,38 @@ async function linkStaff(pid, aux, gid, add) {
  * Cadastra uma pessoa num grupo. Se ainda não houver conta com o e-mail, cria a conta e a pessoa recebe um
  * e-mail para criar a própria senha. Devolve { created } (true = conta nova).
  */
-export async function addMember(gid, { name, email, phone, role: newRole }) {
+export async function addMember(gid, { name, email, phone, role: newRole, no_account: noAccount, cid }) {
   const uid0 = requireUid();
   const r = roleIn(gid);
   if (!CAN_ADD[r || 'cliente']?.includes(newRole)) fail('Você não pode cadastrar este perfil neste grupo.', 403);
   name = text(name, 120);
   email = text(email, 200).toLowerCase();
   phone = text(phone, 40);
-  if (!EMAIL_RE.test(email)) fail('E-mail inválido.');
   const group = await store.get(`groups/${gid}`);
   if (!group) fail('Grupo não encontrado.', 404);
 
+  // Cliente sem conta: só nome e contato (telefone ou e-mail), para a secretaria agendar.
+  // Se o e-mail já tiver conta, adiciona a conta em vez disso.
+  const existingByEmail = email && EMAIL_RE.test(email) ? await store.get(`usersByEmail/${email}`) : null;
+  if (newRole === 'cliente' && noAccount && !existingByEmail) {
+    if (!name) fail('Informe o nome.');
+    if (!phone && !email) fail('Informe o telefone ou o e-mail do cliente.');
+    if (email && !EMAIL_RE.test(email)) fail('E-mail inválido.');
+    const members = await store.list('memberships', [['gid', '==', gid]]);
+    const dup = members.find((m) => (email && m.email === email) || (!email && phone && m.phone === phone && m.no_account));
+    if (dup) fail(`${dup.name} já está no grupo com este ${email ? 'e-mail' : 'telefone'}.`);
+    const contactId = cid || `c_${store.newId('memberships')}`;
+    await store.set(`memberships/${gid}_${contactId}`, {
+      gid, uid: contactId, role: 'cliente', no_account: true, name, email, phone,
+      group_name: group.name, added_by: uid0, added_at: nowIso(),
+    });
+    return { created: false, contact: true };
+  }
+  if (!EMAIL_RE.test(email)) fail('E-mail inválido.');
+
   let uid;
   let created = false;
-  const existing = await store.get(`usersByEmail/${email}`);
+  const existing = existingByEmail;
   if (existing) {
     if (existing.role !== newRole) {
       fail(`Este e-mail já tem conta como ${ROLE_NAMES[existing.role].toLowerCase()}. Cada conta tem um só perfil.`);
@@ -343,6 +364,10 @@ export async function addMember(gid, { name, email, phone, role: newRole }) {
     for (const m of members.filter((x) => x.role === 'profissional')) await linkStaff(m.uid, uid, gid, true);
   } else if (newRole === 'profissional') {
     for (const m of members.filter((x) => x.role === 'auxiliar')) await linkStaff(uid, m.uid, gid, true);
+  }
+  if (newRole === 'cliente') {
+    const contacts = members.filter((m) => m.no_account && m.email === email);
+    for (const c of contacts) await store.remove(`memberships/${gid}_${c.uid}`);
   }
   if (created && !store.demo) await store.resetPassword(email);
   return { created };

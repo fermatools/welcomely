@@ -100,10 +100,18 @@ service cloud.firestore {
       allow create: if signedIn()
         && mid == request.resource.data.gid + '_' + request.resource.data.uid
         && exists(groupDoc(request.resource.data.gid))
-        && request.resource.data.role == getAfter(userDoc(request.resource.data.uid)).data.role
-        && (canAddTo(request.resource.data.gid, request.resource.data.role)
-          // cliente entrando pelo convite
-          || (request.resource.data.uid == me() && request.resource.data.role == 'cliente'));
+        && (
+          // cliente sem conta (só nome e contato), cadastrado por quem pode cadastrar clientes no grupo
+          (request.resource.data.get('no_account', false) == true
+            && request.resource.data.role == 'cliente'
+            && request.resource.data.uid.matches('c_[A-Za-z0-9]+')
+            && canAddTo(request.resource.data.gid, 'cliente'))
+          // pessoa com conta
+          || (request.resource.data.get('no_account', false) != true
+            && request.resource.data.role == getAfter(userDoc(request.resource.data.uid)).data.role
+            && (canAddTo(request.resource.data.gid, request.resource.data.role)
+              // cliente entrando pelo convite
+              || (request.resource.data.uid == me() && request.resource.data.role == 'cliente'))));
       allow update: if signedIn() && (resource.data.uid == me() || isAdmin())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']);
       allow delete: if signedIn() && canAddTo(resource.data.gid, resource.data.role);

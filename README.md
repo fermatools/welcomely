@@ -21,6 +21,10 @@ que o atendente desligue a confirmação. Cada agendamento tem **Adicionar à ag
 Ao confirmar, remarcar, cancelar ou agendar pela agenda, o app oferece **avisar o cliente** por e-mail ou
 WhatsApp: abre o e-mail/WhatsApp de quem está usando, com a mensagem pronta (inclui o link do Google Agenda).
 
+Clientes **sem conta** também podem ser cadastrados no grupo (nome + telefone ou e-mail): não recebem e-mail nem
+acessam o app, mas aparecem na lista do grupo e nas sugestões ao agendar. Se depois ganharem conta com o mesmo
+e-mail, o cadastro sem conta é substituído.
+
 Não há cadastro aberto: a pessoa é cadastrada por alguém (e recebe um e-mail para criar a própria senha) ou
 cria a conta de cliente pelo **link de convite** de um grupo (`#/convite/<grupo>`, na tela do grupo).
 
