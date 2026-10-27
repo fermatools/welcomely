@@ -94,11 +94,17 @@ export const canSeeContacts = (pid) => Boolean(session?.manages.find((p) => p.id
 const contactsIn = (gid) => isAdmin() || ['profissional'].includes(roleIn(gid))
   || (roleIn(gid) === 'auxiliar' && addKeyIn(gid) !== 'agenda');
 
-/** Contatos das pessoas de um grupo: Map uid → {email, phone} (vazio sem permissão). */
+/** Contatos das pessoas de um grupo: Map uid → {email, phone} (vazio sem permissão; null se a leitura falhar). */
 async function groupContacts(gid) {
   if (!contactsIn(gid)) return new Map();
-  const rows = await store.list('contacts', [['gid', '==', gid]]);
-  return new Map(rows.map((c) => [c.uid, { email: c.email || '', phone: c.phone || '' }]));
+  try {
+    const rows = await store.list('contacts', [['gid', '==', gid]]);
+    return new Map(rows.map((c) => [c.uid, { email: c.email || '', phone: c.phone || '' }]));
+  } catch (err) {
+    // ex.: regras do Firestore ainda sem a coleção contacts — o grupo abre sem os contatos
+    console.warn('contatos', err);
+    return null;
+  }
 }
 const withContact = (m, map) => ({ ...m, email: map.get(m.uid)?.email ?? m.email ?? '', phone: map.get(m.uid)?.phone ?? m.phone ?? '' });
 const contactDoc = (gid, uid, email, phone) => [`contacts/${gid}_${uid}`, { gid, uid, email: email || '', phone: phone || '' }];
@@ -334,10 +340,11 @@ export async function groupMembers(gid) {
   const [group, members, map] = await Promise.all([
     store.get(`groups/${gid}`), store.list('memberships', [['gid', '==', gid]]), groupContacts(gid)]);
   if (!group) fail('Grupo não encontrado.', 404);
-  const contacts = contactsIn(gid);
+  const contactsError = map === null;
+  const contacts = contactsIn(gid) && !contactsError;
   const list = members.sort(byName).map((m) => (contacts ? withContact(m, map) : { ...m, email: '', phone: '' }));
   return {
-    gid, name: group.name, myRole: r, canAdd: canAddIn(gid), contacts, members: list,
+    gid, name: group.name, myRole: r, canAdd: canAddIn(gid), contacts, contactsError, members: list,
     canSetAccess: ['admin', 'profissional'].includes(r),
   };
 }
@@ -362,7 +369,7 @@ export async function knownPeople(gid) {
     const others = session.groups.filter((g) => g.gid !== gid && ['profissional', 'auxiliar'].includes(g.role));
     const lists = await Promise.all(others.map(async (g) => {
       const [ms, map] = await Promise.all([store.list('memberships', [['gid', '==', g.gid]]), groupContacts(g.gid)]);
-      return ms.map((m) => withContact(m, map));
+      return ms.map((m) => withContact(m, map || new Map()));
     }));
     people = lists.flat().map(fromMember);
   }
