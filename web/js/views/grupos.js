@@ -88,6 +88,8 @@ export async function detail(el, gid) {
       <p><a href="#/grupos">${icon('left')} Grupos</a></p>
       <div class="page-head"><h1>${esc(g.name)}</h1>
         ${g.canAdd.length ? `<button class="btn primary" id="add">${icon('plus')} Adicionar pessoa</button>` : ''}</div>
+      ${g.contactsError ? `<section class="card note"><p>Não foi possível ler telefones e e-mails deste grupo (sem permissão).
+        Se você é o administrador, publique o arquivo <b>firestore.rules</b> novo no console do Firebase.</p></section>` : ''}
       <section class="card">
         <h2>Convite para clientes</h2>
         <p class="muted small">Quem abrir este link pode criar uma conta de cliente já dentro deste grupo.</p>
