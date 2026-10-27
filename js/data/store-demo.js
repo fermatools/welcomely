@@ -2,13 +2,14 @@
 // Mesma interface de store-firebase.js. Usado quando o Firebase não está configurado ou com ?demo.
 import { addDays, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, isoDate, minutes } from './logic.js';
 
-const KEY = 'welcomely-demo-v2';
+const KEY = 'welcomely-demo-v3';
 export const DEMO_PASSWORD = 'demo123';
 export const DEMO_ACCOUNTS = [
   ['admin@demo.welcomely', 'Administrador'],
   ['ana@demo.welcomely', 'Atendente (psicóloga)'],
   ['joao@demo.welcomely', 'Atendente (padre)'],
   ['maria@demo.welcomely', 'Auxiliar (secretária)'],
+  ['paulo@demo.welcomely', 'Auxiliar (só agenda)'],
   ['carlos@demo.welcomely', 'Cliente'],
 ];
 
@@ -55,6 +56,7 @@ function seed() {
   user('u-ana', 'Dra. Ana Souza', 'ana@demo.welcomely', 'profissional', '(21) 98888-0001');
   user('u-joao', 'Pe. João Lima', 'joao@demo.welcomely', 'profissional');
   user('u-maria', 'Maria Oliveira', 'maria@demo.welcomely', 'auxiliar', '(21) 97777-0003');
+  user('u-paulo', 'Paulo Mendes', 'paulo@demo.welcomely', 'auxiliar');
   user('u-carlos', 'Carlos Pereira', 'carlos@demo.welcomely', 'cliente', '(21) 96666-0004');
   user('u-bia', 'Beatriz Santos', 'bia@demo.welcomely', 'cliente', '(21) 95555-1234');
   prof('u-ana', {
@@ -66,7 +68,8 @@ function seed() {
     bio: 'Atendimento pastoral, confissões e orientação espiritual.',
   }, [['s-pastoral', 'Atendimento pastoral', 30], ['s-confissao', 'Confissão', 15],
     ['s-batismo', 'Preparação para batismo', 60, 'Conversa com pais e padrinhos']]);
-  group('g-consultorio', 'Consultório Dra. Ana', ['u-ana', 'u-maria', 'u-carlos', 'u-bia']);
+  group('g-consultorio', 'Consultório Dra. Ana', ['u-ana', 'u-maria', 'u-paulo', 'u-carlos', 'u-bia']);
+  docs['memberships/g-consultorio_u-paulo'].access = 'agenda';   // auxiliar que só agenda
   group('g-paroquia', 'Paróquia São José', ['u-joao', 'u-ana', 'u-maria', 'u-carlos']);
 
   // Agendamentos no próximo dia útil

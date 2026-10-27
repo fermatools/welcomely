@@ -28,10 +28,14 @@ export const store = DEMO
 
 export const ROLE_NAMES = { admin: 'Administrador', profissional: 'Atendente', auxiliar: 'Auxiliar', cliente: 'Cliente' };
 // Quem cada perfil pode cadastrar num grupo
+// Níveis do auxiliar, por grupo: 'clientes' (secretaria: cadastra e vê os dados dos clientes) ou
+// 'agenda' (só agenda, vê apenas o nome dos clientes). Sem o campo = 'clientes'.
+export const AUX_ACCESS = { clientes: 'Secretaria (gerencia clientes)', agenda: 'Só agenda (vê só o nome dos clientes)' };
 export const CAN_ADD = {
   admin: ['profissional', 'auxiliar', 'cliente'],
   profissional: ['auxiliar', 'cliente'],
   auxiliar: ['cliente'],
+  agenda: [],
   cliente: [],
 };
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -66,6 +70,15 @@ const isAdmin = () => role() === 'admin';
 const isManager = (pid) => Boolean(session?.manages.some((p) => p.id === pid));
 /** Papel do usuário atual no grupo (admin vale como gestor de todos). */
 const roleIn = (gid) => (isAdmin() ? 'admin' : session?.groups.find((g) => g.gid === gid)?.role ?? null);
+/** Papel efetivo para cadastrar no grupo: auxiliar "só agenda" não cadastra ninguém. */
+const addKeyIn = (gid) => {
+  const g = isAdmin() ? null : session?.groups.find((x) => x.gid === gid);
+  if (g?.role === 'auxiliar' && g.access === 'agenda') return 'agenda';
+  return roleIn(gid) || 'cliente';
+};
+const canAddIn = (gid) => CAN_ADD[addKeyIn(gid)] || [];
+/** Pode ver telefone/e-mail dos clientes deste atendente? (auxiliar "só agenda" não) */
+export const canSeeContacts = (pid) => Boolean(session?.manages.find((p) => p.id === pid)?.contacts);
 
 function requireManager(pid) {
   requireUid();
@@ -187,7 +200,7 @@ export async function me() {
   const memberships = await store.list('memberships', [['uid', '==', uid]]);
   const result = {
     user: { id: uid, name: user.name, email: user.email, phone: user.phone || '', role: user.role },
-    groups: memberships.map((m) => ({ gid: m.gid, name: m.group_name, role: m.role })).sort(byName),
+    groups: memberships.map((m) => ({ gid: m.gid, name: m.group_name, role: m.role, access: m.access || 'clientes' })).sort(byName),
     manages: [],
     profile: null,
     // O admin só vale com o e-mail confirmado (as regras do Firestore exigem isso)
@@ -196,14 +209,18 @@ export async function me() {
   if (user.role === 'profissional') {
     const p = await getProf(uid);
     result.profile = profileOut(p);
-    result.manages = [{ id: uid, name: p.name, title: p.title }];
+    result.manages = [{ id: uid, name: p.name, title: p.title, contacts: true }];
   } else if (user.role === 'auxiliar') {
     const links = (await store.list('staff', [['aux', '==', uid]])).filter((s) => s.gids?.length);
     const profs = await Promise.all(links.map((s) => store.get(`professionals/${s.pid}`)));
-    result.manages = profs.filter(Boolean).map((p) => ({ id: p.id, name: p.name, title: p.title })).sort(byName);
+    // Vê os contatos dos clientes se for "secretaria" em algum grupo em comum com o atendente
+    const fullIn = new Set(result.groups.filter((g) => g.access !== 'agenda').map((g) => g.gid));
+    result.manages = profs.map((p, i) => p && ({
+      id: p.id, name: p.name, title: p.title, contacts: links[i].gids.some((g) => fullIn.has(g)),
+    })).filter(Boolean).sort(byName);
   } else if (user.role === 'admin' && !result.needsVerification) {
     const profs = await store.list('professionals');
-    result.manages = profs.map((p) => ({ id: p.id, name: p.name, title: p.title })).sort(byName);
+    result.manages = profs.map((p) => ({ id: p.id, name: p.name, title: p.title, contacts: true })).sort(byName);
   }
   session = result;
   return result;
@@ -254,7 +271,12 @@ export async function groupMembers(gid) {
   if (!['admin', 'profissional', 'auxiliar'].includes(r)) fail('Você não gerencia este grupo.', 403);
   const [group, members] = await Promise.all([store.get(`groups/${gid}`), store.list('memberships', [['gid', '==', gid]])]);
   if (!group) fail('Grupo não encontrado.', 404);
-  return { gid, name: group.name, myRole: r, canAdd: CAN_ADD[r], members: members.sort(byName) };
+  const contacts = addKeyIn(gid) !== 'agenda';
+  const list = members.sort(byName).map((m) => (contacts ? m : { ...m, email: '', phone: '' }));
+  return {
+    gid, name: group.name, myRole: r, canAdd: canAddIn(gid), contacts, members: list,
+    canSetAccess: ['admin', 'profissional'].includes(r),
+  };
 }
 
 /**
@@ -262,8 +284,7 @@ export async function groupMembers(gid) {
  * auxiliar, as pessoas dos outros grupos que eles gerenciam. Só perfis que o usuário pode cadastrar.
  */
 export async function knownPeople(gid) {
-  const r = roleIn(gid);
-  const allowed = CAN_ADD[r || 'cliente'] || [];
+  const allowed = canAddIn(gid);
   if (!allowed.length) return [];
   const inGroup = new Set((await store.list('memberships', [['gid', '==', gid]])).map((m) => m.uid));
   let people;
@@ -299,10 +320,9 @@ async function linkStaff(pid, aux, gid, add) {
  * Cadastra uma pessoa num grupo. Se ainda não houver conta com o e-mail, cria a conta e a pessoa recebe um
  * e-mail para criar a própria senha. Devolve { created } (true = conta nova).
  */
-export async function addMember(gid, { name, email, phone, role: newRole, no_account: noAccount, cid }) {
+export async function addMember(gid, { name, email, phone, role: newRole, no_account: noAccount, cid, access }) {
   const uid0 = requireUid();
-  const r = roleIn(gid);
-  if (!CAN_ADD[r || 'cliente']?.includes(newRole)) fail('Você não pode cadastrar este perfil neste grupo.', 403);
+  if (!canAddIn(gid).includes(newRole)) fail('Você não pode cadastrar este perfil neste grupo.', 403);
   name = text(name, 120);
   email = text(email, 200).toLowerCase();
   phone = text(phone, 40);
@@ -357,6 +377,7 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
     }
     t.set(`memberships/${gid}_${uid}`, {
       gid, uid, role: newRole, name, email, phone, group_name: group.name, added_by: uid0, added_at: nowIso(),
+      ...(newRole === 'auxiliar' ? { access: access === 'agenda' ? 'agenda' : 'clientes' } : {}),
     });
   });
   // Auxiliar passa a gerenciar os atendentes do grupo (e vice-versa)
@@ -373,11 +394,19 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
   return { created };
 }
 
+/** Muda o nível de um auxiliar no grupo (atendente ou admin). */
+export async function setAuxAccess(gid, uid, access) {
+  requireUid();
+  if (!['admin', 'profissional'].includes(roleIn(gid))) fail('Apenas o atendente ou o administrador muda isto.', 403);
+  if (!(access in AUX_ACCESS)) fail('Nível inválido.');
+  await store.update(`memberships/${gid}_${uid}`, { access });
+}
+
 export async function removeMember(gid, uid) {
   requireUid();
   const m = await store.get(`memberships/${gid}_${uid}`);
   if (!m) fail('Esta pessoa não está no grupo.', 404);
-  if (!CAN_ADD[roleIn(gid) || 'cliente']?.includes(m.role)) fail('Você não pode retirar esta pessoa do grupo.', 403);
+  if (!canAddIn(gid).includes(m.role)) fail('Você não pode retirar esta pessoa do grupo.', 403);
   const members = await store.list('memberships', [['gid', '==', gid]]);
   if (m.role === 'auxiliar') {
     for (const p of members.filter((x) => x.role === 'profissional')) await linkStaff(p.uid, uid, gid, false);
@@ -451,6 +480,34 @@ export async function slots(pid, serviceId, day) {
     store.get(`professionals/${pid}/days/${day}`), store.list(`professionals/${pid}/blocks`)]);
   if (!service) fail('Serviço não encontrado.', 404);
   return computeSlots({ prof, duration: service.duration_min, day, dayDoc, blocks, enforce: !isManager(pid) });
+}
+
+/** Horários livres (visão de quem gerencia) de cada dia entre `from` e `to`, para um serviço. */
+export async function freeSlotsRange(pid, serviceId, from, to) {
+  requireManager(pid);
+  const days = [];
+  for (let d = from; d <= to && days.length < 31; d = addDays(d, 1)) days.push(d);
+  const [prof, service, blocks, dayDocs] = await Promise.all([
+    getProf(pid), store.get(`professionals/${pid}/services/${serviceId}`), store.list(`professionals/${pid}/blocks`),
+    Promise.all(days.map((d) => store.get(`professionals/${pid}/days/${d}`)))]);
+  if (!service) fail('Serviço não encontrado.', 404);
+  const out = {};
+  days.forEach((day, i) => {
+    out[day] = computeSlots({ prof, duration: service.duration_min, day, dayDoc: dayDocs[i], blocks, enforce: false });
+  });
+  return { slots: out, blocks };
+}
+
+/** Grupos do atendente em que o usuário pode cadastrar clientes (para criar o cliente na hora de agendar). */
+export async function bookingGroups(pid) {
+  requireManager(pid);
+  if (isAdmin()) {
+    const ms = await store.list('memberships', [['uid', '==', pid]]);
+    return ms.filter((m) => m.role === 'profissional').map((m) => ({ gid: m.gid, name: m.group_name })).sort(byName);
+  }
+  const mine = session.groups.filter((g) => canAddIn(g.gid).includes('cliente'));
+  const hits = await Promise.all(mine.map((g) => store.get(`memberships/${g.gid}_${pid}`)));
+  return mine.filter((g, i) => hits[i]?.role === 'profissional').map((g) => ({ gid: g.gid, name: g.name }));
 }
 
 // ---------------------------------------------------------------- serviços
@@ -549,20 +606,46 @@ export async function pending(pid) {
   return sortByStart(rows.filter((a) => a.day >= today).map(apptOut));
 }
 
-/** Clientes para sugerir ao agendar: os dos grupos do usuário e os já atendidos sem conta. */
-export async function clientSuggestions(pid, q) {
+/**
+ * Clientes para escolher ao agendar: os clientes dos grupos do atendente (com ou sem conta) e os já atendidos
+ * sem cadastro. Busca vazia lista todos. Para o auxiliar "só agenda", só os nomes.
+ */
+export async function clientSuggestions(pid, q = '') {
   requireManager(pid);
-  const term = fold(q);
-  const staffGroups = isAdmin() ? [] : session.groups.filter((g) => g.role !== 'cliente');
+  const term = fold(q.trim());
+  const contacts = canSeeContacts(pid);
+  const groups = await profGroupsVisible(pid);
   const [past, ...groupLists] = await Promise.all([
     store.list(`professionals/${pid}/clients`),
-    ...staffGroups.map((g) => store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'cliente']])),
+    ...groups.map((g) => store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'cliente']])),
   ]);
   const seen = new Set();
-  return [...groupLists.flat().map((m) => ({ name: m.name, phone: m.phone, email: m.email, last: '' })), ...past]
-    .filter((c) => fold(`${c.name} ${c.email}`).includes(term) || phoneMatches(c.phone, term))
+  const all = [
+    ...groupLists.flat().map((m) => ({
+      ref: `m:${m.gid}_${m.uid}`, uid: m.no_account ? null : m.uid, name: m.name, phone: m.phone || '', email: m.email || '', group: m.group_name,
+    })),
+    ...past.map((c) => ({ ref: `p:${pid}/${c.id}`, uid: null, name: c.name, phone: c.phone || '', email: c.email || '', group: '' })),
+  ];
+  all.forEach((c) => clientRefs.set(c.ref, c));   // contato completo fica só aqui (para agendar)
+  return all
+    .filter((c) => !term || fold(`${c.name} ${contacts ? c.email : ''}`).includes(term) || (contacts && phoneMatches(c.phone, term)))
     .filter((c) => { const k = c.email || `${fold(c.name)}|${phoneKey(c.phone)}`; if (seen.has(k)) return false; seen.add(k); return true; })
-    .slice(0, 20);
+    .sort(byName)
+    .slice(0, 60)
+    .map((c) => (contacts ? c : { ...c, phone: '', email: '', hidden: true }));
+}
+const clientRefs = new Map();
+
+/** Grupos do atendente que o usuário enxerga (admin: todos os do atendente). */
+async function profGroupsVisible(pid) {
+  if (isAdmin()) {
+    const ms = await store.list('memberships', [['uid', '==', pid]]);
+    return ms.filter((m) => m.role === 'profissional').map((m) => ({ gid: m.gid, name: m.group_name }));
+  }
+  const mine = session.groups.filter((g) => g.role !== 'cliente');
+  if (role() === 'profissional') return mine;
+  const hits = await Promise.all(mine.map((g) => store.get(`memberships/${g.gid}_${pid}`)));
+  return mine.filter((g, i) => hits[i]?.role === 'profissional');
 }
 
 export async function myAppointments() {
@@ -600,9 +683,14 @@ export async function createAppointment(data) {
   let status;
   let gid = '';
   if (manager) {
-    const name = text(data.client_name, 120);
+    const ref = data.client_ref ? clientRefs.get(data.client_ref) : null;
+    if (data.client_ref && !ref) fail('Cliente não encontrado. Busque de novo na lista.');
+    const name = ref ? ref.name : text(data.client_name, 120);
     if (!name) fail('Informe o nome do cliente.');
-    client = { client_id: null, client_name: name, client_phone: text(data.client_phone, 40), client_email: text(data.client_email, 200).toLowerCase() };
+    // Cliente com conta: o agendamento fica ligado à conta (aparece em "Meus agendamentos")
+    client = ref
+      ? { client_id: ref.uid, client_name: ref.name, client_phone: ref.phone, client_email: ref.email }
+      : { client_id: null, client_name: name, client_phone: text(data.client_phone, 40), client_email: text(data.client_email, 200).toLowerCase() };
     status = 'confirmado';
     const now = nowLocal();
     if (data.fit_in) {  // encaixe: fora da grade, mas sem conflito (checado na transação)
@@ -642,7 +730,7 @@ export async function createAppointment(data) {
     t.set(dayPath, { busy: [...(fresh?.busy || []), { id, s: time, e: endTime, c: client.client_id }] });
   });
   // Sugestão de cliente sem conta para as próximas vezes (não essencial)
-  if (manager && !client.client_email) {
+  if (manager && !client.client_email && !data.client_ref) {
     store.set(`professionals/${pid}/clients/${clientKey(null, client.client_name, client.client_phone)}`,
       { name: client.client_name, phone: client.client_phone, email: '', last: `${day}T${time}` }).catch(() => {});
   }
