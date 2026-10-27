@@ -7,7 +7,7 @@ import {
   signInWithEmailAndPassword, signInWithPopup, signOut, updatePassword,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  collection, deleteDoc, doc, getDoc, getDocs, getFirestore, limit, query, runTransaction, setDoc, updateDoc, where,
+  collection, deleteDoc, deleteField, doc, getDoc, getDocs, getFirestore, limit, query, runTransaction, setDoc, updateDoc, where,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 const AUTH_ERRORS = {
@@ -120,6 +120,7 @@ export function createFirebaseStore(config) {
     set: wrap((path, data, merge = false) => setDoc(ref(path), data, { merge })),
     update: wrap((path, data) => updateDoc(ref(path), data)),
     remove: wrap((path) => deleteDoc(ref(path))),
+    removeFields: wrap((path, keys) => updateDoc(ref(path), Object.fromEntries(keys.map((k) => [k, deleteField()])))),
     // Transação: leituras primeiro (t.get), depois escritas (t.set/t.update/t.remove).
     tx: wrap((fn) => runTransaction(db, async (t) => fn({
       get: async (path) => snapData(await t.get(ref(path))),

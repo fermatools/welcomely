@@ -168,7 +168,8 @@ export async function agenda(el) {
       `${appt.status === 'pendente' ? 'Recusar' : 'Cancelar'} o atendimento de ${appt.client_name}?`,
       { okLabel: appt.status === 'pendente' ? 'Recusar' : 'Cancelar atendimento', danger: true })) return undefined;
     return busy(b, async () => {
-      const updated = await api.updateAppointment(appt.id, { status: act });
+      // o agendamento salvo não traz telefone/e-mail (ficam à parte): reaproveita os que já estão na tela
+      const updated = { ...await api.updateAppointment(appt.id, { status: act }), client_phone: appt.client_phone, client_email: appt.client_email };
       toast('Agendamento atualizado.');
       rerender();
       // Ao confirmar um pedido ou cancelar, oferece avisar o cliente
@@ -320,7 +321,7 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
         return false;
       }
       if (reschedule) {
-        const updated = await api.updateAppointment(appt.id, { date: data.date, time });
+        const updated = { ...await api.updateAppointment(appt.id, { date: data.date, time }), client_phone: appt.client_phone, client_email: appt.client_email };
         toast('Atendimento remarcado.');
         if (contacts) setTimeout(() => notifyClient(updated, 'remarcado'), 50);
         onDone();
