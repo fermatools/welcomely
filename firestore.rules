@@ -1,3 +1,4 @@
+// Versão: 2026-10-27 15:23 (atualize a data e o horário a cada mudança neste arquivo)
 rules_version = '2';
 
 // Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
