@@ -17,7 +17,8 @@ const NAV = {
     ['#/grupos', 'Grupos', 'users'], ['#/conta', 'Conta', 'user']],
   auxiliar: [['#/agenda', 'Agenda', 'calendar'], ['#/servicos', 'Serviços', 'list'], ['#/horarios', 'Horários', 'clock'],
     ['#/grupos', 'Grupos', 'users'], ['#/conta', 'Conta', 'user']],
-  admin: [['#/grupos', 'Grupos', 'users'], ['#/agenda', 'Agendas', 'calendar'], ['#/conta', 'Conta', 'user']],
+  admin: [['#/agenda', 'Agendas', 'calendar'], ['#/horarios', 'Horários', 'clock'], ['#/servicos', 'Serviços', 'list'],
+    ['#/grupos', 'Grupos', 'users'], ['#/conta', 'Conta', 'user']],
 };
 
 // [padrão, view, opções]. public: abre sem login; roles: perfis que podem abrir.

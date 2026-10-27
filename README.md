@@ -12,8 +12,12 @@ Um app **FERMATools** · fermatools@gmail.com · https://fermatools.github.io/
 |---|---|
 | **Administrador** | Conta definida em `web/js/config.js` (só o hash do e-mail; vale com o e-mail confirmado). Cria grupos, cadastra qualquer pessoa em qualquer grupo e vê todas as agendas. |
 | **Atendente** | Agenda do dia/semana, confirma, remarca, marca concluído/falta; serviços; horários por regras de repetição (toda semana, a cada N semanas, n-ésimo dia do mês, data única, com validade) e bloqueios; regras de agendamento. Cadastra auxiliares e clientes nos seus grupos e vê só as pessoas desses grupos. Pode estar em vários grupos. |
-| **Auxiliar** (secretaria) | Gerencia a agenda dos atendentes dos seus grupos (agenda clientes com ou sem conta, encaixes, confirma, remarca). Cadastra clientes nos seus grupos. |
+| **Auxiliar** | Gerencia a agenda dos atendentes dos seus grupos (agenda, encaixes, confirma, remarca). Dois níveis, por grupo, definidos pelo atendente ou admin: **Secretaria** (cadastra clientes e vê telefone/e-mail) e **Só agenda** (agenda escolhendo clientes já cadastrados, vendo só o nome). |
 | **Cliente** | Agenda só com atendentes dos seus grupos; acompanha e cancela os seus agendamentos. |
+
+A **Agenda** mostra o panorama do dia (atendimentos, horários livres — toque para agendar ali — e bloqueios) e da
+semana (ocupação por dia). Ao agendar, escolhe-se o cliente numa lista dos clientes do grupo ou cria-se um novo
+na mesma tela (que pode ficar salvo no grupo).
 
 Pedidos de clientes ficam **pendentes** (amarelo) até o atendente ou o auxiliar confirmar (verde), a menos
 que o atendente desligue a confirmação. Cada agendamento tem **Adicionar à agenda** (Google Agenda, arquivo

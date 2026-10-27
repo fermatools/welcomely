@@ -100,7 +100,12 @@ export async function detail(el, gid) {
           <article class="card person">
             <span class="avatar">${esc(initials(m.name))}</span>
             <div><b>${esc(m.name)}</b>${m.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>
-              <small class="muted">${esc([m.email, m.phone].filter(Boolean).join(' · '))}</small></div>
+              <small class="muted">${esc([m.email, m.phone].filter(Boolean).join(' · '))}</small>
+              ${m.role === 'auxiliar' ? (g.canSetAccess
+                ? `<label class="inline-select small">Acesso
+                    <select data-access="${esc(m.uid)}">${Object.entries(api.AUX_ACCESS).map(([k, label]) => `
+                      <option value="${k}"${(m.access || 'clientes') === k ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`
+                : `<br><span class="badge info">${esc(api.AUX_ACCESS[m.access || 'clientes'])}</span>`) : ''}</div>
             ${g.canAdd.includes(m.role) && m.uid !== state.user.id
               ? `<button class="btn small ghost danger" data-rm="${esc(m.uid)}" data-name="${esc(m.name)}">Retirar</button>` : ''}
           </article>`).join('') : '<p class="muted small">Ninguém ainda.</p>'}</div>`).join('')}
@@ -108,6 +113,14 @@ export async function detail(el, gid) {
 
   el.querySelector('#share').addEventListener('click', () => share(`Convite: ${g.name}`, link));
   el.querySelector('#add')?.addEventListener('click', () => addForm(g, () => detail(el, gid)));
+  el.querySelector('.page').addEventListener('change', (e) => {
+    const sel = e.target.closest('[data-access]');
+    if (!sel) return;
+    busy(sel, async () => {
+      await api.setAuxAccess(gid, sel.dataset.access, sel.value);
+      toast('Acesso do auxiliar alterado.');
+    });
+  });
   el.querySelector('.page').addEventListener('click', async (e) => {
     const rm = e.target.closest('[data-rm]');
     if (!rm || !await confirmDialog(`Retirar ${rm.dataset.name} do grupo "${g.name}"? A conta continua existindo.`,
@@ -142,6 +155,8 @@ function addForm(g, onDone) {
               ${icon(r === 'cliente' ? 'calendar' : r === 'auxiliar' ? 'users' : 'user')}
               <span><b>${api.ROLE_NAMES[r]}</b></span></label>`).join('')}
         </fieldset>
+        ${g.canAdd.includes('auxiliar') ? `<label id="access-row" hidden>Acesso do auxiliar<select name="access">
+          ${Object.entries(api.AUX_ACCESS).map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join('')}</select></label>` : ''}
         ${g.canAdd.includes('cliente') ? `<label class="check" id="no-account-row"><input type="checkbox" name="no_account">
           Cliente sem conta: só nome e contato, para agendar pela secretaria (não recebe e-mail nem acessa o app)</label>` : ''}
         <label>E-mail <small class="muted" id="email-hint" hidden>(se não tiver telefone)</small><input name="email" type="email" autocomplete="off"></label>
@@ -153,7 +168,8 @@ function addForm(g, onDone) {
       </div>`,
     onSubmit: async (form) => {
       const data = picked
-        ? { email: picked.email, name: picked.name, phone: picked.phone, role: picked.role, no_account: picked.no_account, cid: picked.no_account ? picked.uid : undefined }
+        ? { email: picked.email, name: picked.name, phone: picked.phone, role: picked.role, no_account: picked.no_account, cid: picked.no_account ? picked.uid : undefined,
+          access: form.elements.access?.value }
         : formData(form);
       if (!picked && data.role !== 'cliente') data.no_account = false;
       if (!data.no_account && !data.email) {
@@ -208,6 +224,8 @@ function addForm(g, onDone) {
     const role = form.querySelector('[name=role]:checked')?.value;
     const row = form.querySelector('#no-account-row');
     if (row) row.hidden = role !== 'cliente';
+    const accessRow = form.querySelector('#access-row');
+    if (accessRow) accessRow.hidden = role !== 'auxiliar';
     const contact = role === 'cliente' && form.elements.no_account?.checked;
     form.querySelector('#email-hint').hidden = !contact;
     form.querySelector('#phone-hint').textContent = contact ? '(se não tiver e-mail)' : '(opcional)';
