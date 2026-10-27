@@ -12,7 +12,7 @@ Um app **FERMATools** · fermatools@gmail.com · https://fermatools.github.io/
 |---|---|
 | **Administrador** | Conta definida em `web/js/config.js` (só o hash do e-mail; vale com o e-mail confirmado). Cria grupos, cadastra qualquer pessoa em qualquer grupo e vê todas as agendas. |
 | **Atendente** | Agenda do dia/semana, confirma, remarca, marca concluído/falta; serviços; horários por regras de repetição (toda semana, a cada N semanas, n-ésimo dia do mês, data única, com validade) e bloqueios; regras de agendamento. Cadastra auxiliares e clientes nos seus grupos e vê só as pessoas desses grupos. Pode estar em vários grupos. |
-| **Auxiliar** | Gerencia a agenda dos atendentes dos seus grupos (agenda, encaixes, confirma, remarca). Dois níveis, por grupo, definidos pelo atendente ou admin: **Secretaria** (cadastra clientes e vê telefone/e-mail) e **Só agenda** (agenda escolhendo clientes já cadastrados, vendo só o nome). |
+| **Auxiliar** | Gerencia a agenda dos atendentes dos seus grupos (agenda, encaixes, confirma, remarca). Dois níveis, por grupo, definidos pelo atendente ou admin: **Secretaria** (cadastra clientes e vê telefone/e-mail) e **Só agenda** (agenda escolhendo clientes já cadastrados, vendo só o nome — telefone e e-mail ficam em documentos que as regras do Firestore não deixam esse auxiliar ler). |
 | **Cliente** | Agenda só com atendentes dos seus grupos; acompanha e cancela os seus agendamentos. |
 
 A **Agenda** mostra o panorama do dia (atendimentos, horários livres — toque para agendar ali — e bloqueios) e da
@@ -49,6 +49,11 @@ android/             app Android (Kotlin): abre o app web numa WebView
 tools/gen_icons.py   gera os ícones
 publicar.ps1         publica no GitHub (main + pasta web/ na branch gh-pages)
 ```
+
+Contatos protegidos: telefone e e-mail nunca ficam nas participações (`memberships`) nem nos agendamentos; ficam em
+`contacts/{grupo}_{pessoa}` e `apptContacts/{agendamento}`, legíveis só pela própria pessoa, admin, atendente e
+auxiliar secretaria (`fullstaff/`). O agendamento guarda o nome, a referência ao contato (`client_ref`) e o hash do
+e-mail (para o cliente com esse e-mail ver o agendamento). Dados antigos são migrados no primeiro login do admin.
 
 Reservas sem conflito: cada profissional tem um documento por dia com os horários ocupados (sem dados
 pessoais); a reserva é feita numa transação sobre esse documento, então duas pessoas não conseguem pegar

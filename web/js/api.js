@@ -7,11 +7,15 @@
 //   users/{uid}                    nome, e-mail, telefone, perfil (privado: a própria pessoa e o admin)
 //   usersByEmail/{email}           uid, nome, perfil (para achar uma conta pelo e-mail ao cadastrar)
 //   groups/{gid}                   nome do grupo (o id serve de convite)
-//   memberships/{gid}_{uid}        participação: perfil, nome, contato, nome do grupo
+//   memberships/{gid}_{uid}        participação: perfil, nome, nome do grupo (SEM telefone/e-mail)
+//   contacts/{gid}_{uid}           telefone e e-mail da pessoa no grupo (não legível pelo auxiliar "só agenda")
 //   staff/{pid}_{auxUid}           grupos em que o auxiliar e o atendente estão juntos (dá acesso à agenda)
+//   fullstaff/{pid}_{auxUid}       idem, só os grupos em que o auxiliar é "secretaria" (dá acesso aos contatos)
 //   professionals/{uid}            perfil do atendente, regras e grade semanal
 //     services/{id} · blocks/{id} · days/{AAAA-MM-DD} (horários ocupados, sem nomes) · clients/{id}
-//   appointments/{id}              agendamentos
+//   appointments/{id}              agendamentos (nome do cliente; contato só por referência)
+//   apptContacts/{id}              telefone/e-mail digitados num agendamento (mesma proteção de contacts)
+//   meta/migrations                migrações de dados já feitas
 //
 // A reserva usa uma transação sobre o documento do dia: duas pessoas não conseguem pegar o mesmo horário.
 import { ADMIN_EMAIL_SHA256 } from './config.js';
@@ -54,6 +58,13 @@ async function isAdminEmail(email) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('') === ADMIN_EMAIL_SHA256;
 }
+async function sha256Hex(textValue) {
+  if (!crypto.subtle) return '';
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(textValue));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+/** Hash do e-mail guardado no agendamento: o cliente com esse e-mail (confirmado) vê o agendamento. */
+const emailHash = (email) => (email ? sha256Hex(String(email).toLowerCase()) : Promise.resolve(''));
 const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
 // Sessão atual (preenchida por me())
@@ -79,6 +90,19 @@ const addKeyIn = (gid) => {
 const canAddIn = (gid) => CAN_ADD[addKeyIn(gid)] || [];
 /** Pode ver telefone/e-mail dos clientes deste atendente? (auxiliar "só agenda" não) */
 export const canSeeContacts = (pid) => Boolean(session?.manages.find((p) => p.id === pid)?.contacts);
+/** Pode ver os contatos das pessoas deste grupo? */
+const contactsIn = (gid) => isAdmin() || ['profissional'].includes(roleIn(gid))
+  || (roleIn(gid) === 'auxiliar' && addKeyIn(gid) !== 'agenda');
+
+/** Contatos das pessoas de um grupo: Map uid → {email, phone} (vazio sem permissão). */
+async function groupContacts(gid) {
+  if (!contactsIn(gid)) return new Map();
+  const rows = await store.list('contacts', [['gid', '==', gid]]);
+  return new Map(rows.map((c) => [c.uid, { email: c.email || '', phone: c.phone || '' }]));
+}
+const withContact = (m, map) => ({ ...m, email: map.get(m.uid)?.email ?? m.email ?? '', phone: map.get(m.uid)?.phone ?? m.phone ?? '' });
+const contactDoc = (gid, uid, email, phone) => [`contacts/${gid}_${uid}`, { gid, uid, email: email || '', phone: phone || '' }];
+const safeGet = (path) => store.get(path).catch(() => null);
 
 function requireManager(pid) {
   requireUid();
@@ -141,8 +165,9 @@ export async function register({ name, email, phone, password, invite }) {
     t.set(`usersByEmail/${email}`, { uid, name, role: userRole, created_by: uid });
     if (group && !asAdmin) {
       t.set(`memberships/${group.gid}_${uid}`, {
-        gid: group.gid, uid, role: 'cliente', name, email, phone, group_name: group.name, added_by: uid, added_at: nowIso(),
+        gid: group.gid, uid, role: 'cliente', name, group_name: group.name, added_by: uid, added_at: nowIso(),
       });
+      t.set(...contactDoc(group.gid, uid, email, phone));
     }
   });
 }
@@ -173,8 +198,9 @@ export async function loginWithGoogle(invite) {
     t.set(`usersByEmail/${email}`, { uid: g.uid, name, role, created_by: g.uid });
     if (group && !asAdmin) {
       t.set(`memberships/${group.gid}_${g.uid}`, {
-        gid: group.gid, uid: g.uid, role: 'cliente', name, email, phone: '', group_name: group.name, added_by: g.uid, added_at: nowIso(),
+        gid: group.gid, uid: g.uid, role: 'cliente', name, group_name: group.name, added_by: g.uid, added_at: nowIso(),
       });
+      t.set(...contactDoc(group.gid, g.uid, email, ''));
     }
   });
 }
@@ -223,6 +249,7 @@ export async function me() {
     result.manages = profs.map((p) => ({ id: p.id, name: p.name, title: p.title, contacts: true })).sort(byName);
   }
   session = result;
+  if (user.role === 'admin' && !result.needsVerification) await migrateContacts().catch((err) => console.warn('migração', err));
   return result;
 }
 
@@ -240,8 +267,43 @@ export async function updateMe({ name, phone, current_password, new_password }) 
     t.update(`users/${uid}`, { name, phone });
     t.update(`usersByEmail/${email}`, { name });
     if (role() === 'profissional') t.update(`professionals/${uid}`, { name });
-    for (const g of session.groups) t.update(`memberships/${g.gid}_${uid}`, { name, phone });
+    for (const g of session.groups) {
+      t.update(`memberships/${g.gid}_${uid}`, { name });
+      t.set(...contactDoc(g.gid, uid, email, phone));
+    }
   });
+}
+
+// ---------------------------------------------------------------- migração
+
+/**
+ * Uma vez, pelo admin: tira telefone/e-mail de memberships e appointments (contatos ficam em contacts/ e
+ * apptContacts/), põe o hash do e-mail nos agendamentos e cria os vínculos fullstaff das secretarias.
+ */
+async function migrateContacts() {
+  const meta = await store.get('meta/migrations');
+  if (meta?.contacts_v1) return;
+  const [members, appts, staff] = await Promise.all([store.list('memberships'), store.list('appointments'), store.list('staff')]);
+  for (const m of members) {
+    if (m.email === undefined && m.phone === undefined) continue;
+    await store.set(...contactDoc(m.gid, m.uid, m.email, m.phone));
+    await store.removeFields(`memberships/${m.id}`, ['email', 'phone']);
+  }
+  for (const a of appts) {
+    if (a.client_phone === undefined && a.client_email === undefined) continue;
+    if (a.client_phone || a.client_email) {
+      await store.set(`apptContacts/${a.id}`, { professional_id: a.professional_id, client_phone: a.client_phone || '', client_email: a.client_email || '' });
+    }
+    await store.update(`appointments/${a.id}`, { client_email_hash: await emailHash(a.client_email), client_ref: a.client_ref || '' });
+    await store.removeFields(`appointments/${a.id}`, ['client_phone', 'client_email']);
+  }
+  const byKey = new Map(members.map((m) => [m.id, m]));
+  for (const st of staff) {
+    for (const g of st.gids || []) {
+      if (byKey.get(`${g}_${st.aux}`)?.access !== 'agenda') await linkStaff(st.pid, st.aux, g, true, 'fullstaff');
+    }
+  }
+  await store.set('meta/migrations', { contacts_v1: nowIso() }, true);
 }
 
 // ---------------------------------------------------------------- grupos
@@ -269,10 +331,11 @@ export async function createGroup(name) {
 export async function groupMembers(gid) {
   const r = roleIn(gid);
   if (!['admin', 'profissional', 'auxiliar'].includes(r)) fail('Você não gerencia este grupo.', 403);
-  const [group, members] = await Promise.all([store.get(`groups/${gid}`), store.list('memberships', [['gid', '==', gid]])]);
+  const [group, members, map] = await Promise.all([
+    store.get(`groups/${gid}`), store.list('memberships', [['gid', '==', gid]]), groupContacts(gid)]);
   if (!group) fail('Grupo não encontrado.', 404);
-  const contacts = addKeyIn(gid) !== 'agenda';
-  const list = members.sort(byName).map((m) => (contacts ? m : { ...m, email: '', phone: '' }));
+  const contacts = contactsIn(gid);
+  const list = members.sort(byName).map((m) => (contacts ? withContact(m, map) : { ...m, email: '', phone: '' }));
   return {
     gid, name: group.name, myRole: r, canAdd: canAddIn(gid), contacts, members: list,
     canSetAccess: ['admin', 'profissional'].includes(r),
@@ -290,12 +353,17 @@ export async function knownPeople(gid) {
   let people;
   const fromMember = (m) => ({ uid: m.uid, name: m.name, email: m.email || '', phone: m.phone || '', role: m.role, no_account: Boolean(m.no_account) });
   if (isAdmin()) {
-    const [users, contacts] = await Promise.all([store.list('users'), store.list('memberships', [['no_account', '==', true]])]);
+    const [users, noAccount, contacts] = await Promise.all([
+      store.list('users'), store.list('memberships', [['no_account', '==', true]]), store.list('contacts')]);
+    const map = new Map(contacts.map((c) => [c.uid, c]));
     people = users.map((u) => ({ uid: u.id, name: u.name, email: u.email, phone: u.phone || '', role: u.role, no_account: false }))
-      .concat(contacts.map(fromMember));
+      .concat(noAccount.map((m) => fromMember(withContact(m, map))));
   } else {
     const others = session.groups.filter((g) => g.gid !== gid && ['profissional', 'auxiliar'].includes(g.role));
-    const lists = await Promise.all(others.map((g) => store.list('memberships', [['gid', '==', g.gid]])));
+    const lists = await Promise.all(others.map(async (g) => {
+      const [ms, map] = await Promise.all([store.list('memberships', [['gid', '==', g.gid]]), groupContacts(g.gid)]);
+      return ms.map((m) => withContact(m, map));
+    }));
     people = lists.flat().map(fromMember);
   }
   const seen = new Set();
@@ -304,10 +372,13 @@ export async function knownPeople(gid) {
     .sort(byName);
 }
 
-/** Atualiza o vínculo auxiliar ↔ atendente de um grupo (acrescenta ou retira o grupo da lista). */
-async function linkStaff(pid, aux, gid, add) {
+/**
+ * Atualiza o vínculo auxiliar ↔ atendente de um grupo (acrescenta ou retira o grupo da lista).
+ * kind 'staff' dá acesso à agenda; 'fullstaff' (só secretaria) dá acesso aos contatos dos clientes.
+ */
+async function linkStaff(pid, aux, gid, add, kind = 'staff') {
   await store.tx(async (t) => {
-    const path = `staff/${pid}_${aux}`;
+    const path = `${kind}/${pid}_${aux}`;
     const cur = await t.get(path);
     const gids = new Set(cur?.gids || []);
     if (add === gids.has(gid)) return;
@@ -336,13 +407,16 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
     if (!name) fail('Informe o nome.');
     if (!phone && !email) fail('Informe o telefone ou o e-mail do cliente.');
     if (email && !EMAIL_RE.test(email)) fail('E-mail inválido.');
-    const members = await store.list('memberships', [['gid', '==', gid]]);
+    const [rawMembers, map] = await Promise.all([store.list('memberships', [['gid', '==', gid]]), groupContacts(gid)]);
+    const members = rawMembers.map((m) => withContact(m, map));
     const dup = members.find((m) => (email && m.email === email) || (phone && phoneKey(m.phone) === phoneKey(phone)));
     if (dup) fail(`${dup.name} já está no grupo com este ${email ? 'e-mail' : 'telefone'}.`);
     const contactId = cid || `c_${store.newId('memberships')}`;
-    await store.set(`memberships/${gid}_${contactId}`, {
-      gid, uid: contactId, role: 'cliente', no_account: true, name, email, phone,
-      group_name: group.name, added_by: uid0, added_at: nowIso(),
+    await store.tx(async (t) => {
+      t.set(`memberships/${gid}_${contactId}`, {
+        gid, uid: contactId, role: 'cliente', no_account: true, name, group_name: group.name, added_by: uid0, added_at: nowIso(),
+      });
+      t.set(...contactDoc(gid, contactId, email, phone));
     });
     return { created: false, contact: true };
   }
@@ -364,7 +438,9 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
     created = true;
   }
 
-  const members = await store.list('memberships', [['gid', '==', gid]]);
+  const [rawMembers, map] = await Promise.all([store.list('memberships', [['gid', '==', gid]]), groupContacts(gid)]);
+  const members = rawMembers.map((m) => withContact(m, map));
+  const auxAccess = access === 'agenda' ? 'agenda' : 'clientes';
   await store.tx(async (t) => {
     if (created) {
       t.set(`users/${uid}`, { name, email, phone, role: newRole, created_by: uid0, created_at: nowIso() });
@@ -376,19 +452,29 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
       }
     }
     t.set(`memberships/${gid}_${uid}`, {
-      gid, uid, role: newRole, name, email, phone, group_name: group.name, added_by: uid0, added_at: nowIso(),
-      ...(newRole === 'auxiliar' ? { access: access === 'agenda' ? 'agenda' : 'clientes' } : {}),
+      gid, uid, role: newRole, name, group_name: group.name, added_by: uid0, added_at: nowIso(),
+      ...(newRole === 'auxiliar' ? { access: auxAccess } : {}),
     });
+    t.set(...contactDoc(gid, uid, email, phone));
   });
-  // Auxiliar passa a gerenciar os atendentes do grupo (e vice-versa)
+  // Auxiliar passa a gerenciar os atendentes do grupo (e vice-versa); secretaria também vê os contatos
   if (newRole === 'auxiliar') {
-    for (const m of members.filter((x) => x.role === 'profissional')) await linkStaff(m.uid, uid, gid, true);
+    for (const m of members.filter((x) => x.role === 'profissional')) {
+      await linkStaff(m.uid, uid, gid, true);
+      if (auxAccess === 'clientes') await linkStaff(m.uid, uid, gid, true, 'fullstaff');
+    }
   } else if (newRole === 'profissional') {
-    for (const m of members.filter((x) => x.role === 'auxiliar')) await linkStaff(uid, m.uid, gid, true);
+    for (const m of members.filter((x) => x.role === 'auxiliar')) {
+      await linkStaff(uid, m.uid, gid, true);
+      if (m.access !== 'agenda') await linkStaff(uid, m.uid, gid, true, 'fullstaff');
+    }
   }
   if (newRole === 'cliente') {
     const contacts = members.filter((m) => m.no_account && m.email === email);
-    for (const c of contacts) await store.remove(`memberships/${gid}_${c.uid}`);
+    for (const c of contacts) {
+      await store.remove(`contacts/${gid}_${c.uid}`);
+      await store.remove(`memberships/${gid}_${c.uid}`);
+    }
   }
   if (created && !store.demo) await store.resetPassword(email);
   return { created };
@@ -400,6 +486,8 @@ export async function setAuxAccess(gid, uid, access) {
   if (!['admin', 'profissional'].includes(roleIn(gid))) fail('Apenas o atendente ou o administrador muda isto.', 403);
   if (!(access in AUX_ACCESS)) fail('Nível inválido.');
   await store.update(`memberships/${gid}_${uid}`, { access });
+  const profs = (await store.list('memberships', [['gid', '==', gid]])).filter((m) => m.role === 'profissional');
+  for (const p of profs) await linkStaff(p.uid, uid, gid, access === 'clientes', 'fullstaff');
 }
 
 export async function removeMember(gid, uid) {
@@ -409,10 +497,17 @@ export async function removeMember(gid, uid) {
   if (!canAddIn(gid).includes(m.role)) fail('Você não pode retirar esta pessoa do grupo.', 403);
   const members = await store.list('memberships', [['gid', '==', gid]]);
   if (m.role === 'auxiliar') {
-    for (const p of members.filter((x) => x.role === 'profissional')) await linkStaff(p.uid, uid, gid, false);
+    for (const p of members.filter((x) => x.role === 'profissional')) {
+      await linkStaff(p.uid, uid, gid, false);
+      await linkStaff(p.uid, uid, gid, false, 'fullstaff');
+    }
   } else if (m.role === 'profissional') {
-    for (const a of members.filter((x) => x.role === 'auxiliar')) await linkStaff(uid, a.uid, gid, false);
+    for (const a of members.filter((x) => x.role === 'auxiliar')) {
+      await linkStaff(uid, a.uid, gid, false);
+      await linkStaff(uid, a.uid, gid, false, 'fullstaff');
+    }
   }
+  await store.remove(`contacts/${gid}_${uid}`);
   await store.remove(`memberships/${gid}_${uid}`);
 }
 
@@ -423,8 +518,11 @@ export async function joinGroup(gid) {
   const group = await getInvite(gid);
   if (session.groups.some((g) => g.gid === gid)) return;
   const u = session.user;
-  await store.set(`memberships/${gid}_${uid}`, {
-    gid, uid, role: 'cliente', name: u.name, email: u.email, phone: u.phone, group_name: group.name, added_by: uid, added_at: nowIso(),
+  await store.tx(async (t) => {
+    t.set(`memberships/${gid}_${uid}`, {
+      gid, uid, role: 'cliente', name: u.name, group_name: group.name, added_by: uid, added_at: nowIso(),
+    });
+    t.set(...contactDoc(gid, uid, u.email, u.phone));
   });
 }
 
@@ -595,7 +693,22 @@ export async function agenda(pid, from, to) {
   const chunks = [];
   for (let i = 0; i < days.length; i += 30) chunks.push(days.slice(i, i + 30));
   const parts = await Promise.all(chunks.map((c) => store.list('appointments', [['professional_id', '==', pid], ['day', 'in', c]])));
-  return sortByStart(parts.flat().map(apptOut));
+  return sortByStart(await attachContacts(pid, parts.flat().map(apptOut)));
+}
+
+/** Junta telefone/e-mail aos agendamentos, para quem pode ver os contatos (lidos de apptContacts e contacts). */
+async function attachContacts(pid, appts) {
+  if (!canSeeContacts(pid) || !appts.length) return appts;
+  const refs = [...new Set(appts.map((a) => a.client_ref).filter(Boolean))];
+  const [own, byRef] = await Promise.all([
+    Promise.all(appts.map((a) => safeGet(`apptContacts/${a.id}`))),
+    Promise.all(refs.map((r) => safeGet(`contacts/${r}`))),
+  ]);
+  const refMap = new Map(refs.map((r, i) => [r, byRef[i]]));
+  return appts.map((a, i) => {
+    const c = own[i] || refMap.get(a.client_ref) || {};
+    return { ...a, client_phone: c.client_phone ?? c.phone ?? a.client_phone ?? '', client_email: c.client_email ?? c.email ?? a.client_email ?? '' };
+  });
 }
 
 /** Pedidos aguardando confirmação, de hoje em diante. */
@@ -603,7 +716,7 @@ export async function pending(pid) {
   requireManager(pid);
   const today = nowLocal().date;
   const rows = await store.list('appointments', [['professional_id', '==', pid], ['status', '==', 'pendente']]);
-  return sortByStart(rows.filter((a) => a.day >= today).map(apptOut));
+  return sortByStart(await attachContacts(pid, rows.filter((a) => a.day >= today).map(apptOut)));
 }
 
 /**
@@ -616,8 +729,12 @@ export async function clientSuggestions(pid, q = '') {
   const contacts = canSeeContacts(pid);
   const groups = await profGroupsVisible(pid);
   const [past, ...groupLists] = await Promise.all([
-    store.list(`professionals/${pid}/clients`),
-    ...groups.map((g) => store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'cliente']])),
+    contacts ? store.list(`professionals/${pid}/clients`) : Promise.resolve([]),
+    ...groups.map(async (g) => {
+      const [ms, map] = await Promise.all([
+        store.list('memberships', [['gid', '==', g.gid], ['role', '==', 'cliente']]), contacts ? groupContacts(g.gid) : new Map()]);
+      return ms.map((m) => (contacts ? withContact(m, map) : { ...m, email: '', phone: '' }));
+    }),
   ]);
   const seen = new Set();
   const all = [
@@ -629,7 +746,7 @@ export async function clientSuggestions(pid, q = '') {
   all.forEach((c) => clientRefs.set(c.ref, c));   // contato completo fica só aqui (para agendar)
   return all
     .filter((c) => !term || fold(`${c.name} ${contacts ? c.email : ''}`).includes(term) || (contacts && phoneMatches(c.phone, term)))
-    .filter((c) => { const k = c.email || `${fold(c.name)}|${phoneKey(c.phone)}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .filter((c) => { const k = c.uid || c.email || `${fold(c.name)}|${phoneKey(c.phone)}`; if (seen.has(k)) return false; seen.add(k); return true; })
     .sort(byName)
     .slice(0, 60)
     .map((c) => (contacts ? c : { ...c, phone: '', email: '', hidden: true }));
@@ -653,7 +770,8 @@ export async function myAppointments() {
   const lists = [store.list('appointments', [['client_id', '==', uid]])];
   // Agendamentos feitos pela secretaria com o e-mail do cliente (exige e-mail confirmado)
   if (store.emailVerified() && store.email()) {
-    lists.push(store.list('appointments', [['client_email', '==', store.email()]]).catch(() => []));
+    const h = await emailHash(store.email());
+    if (h) lists.push(store.list('appointments', [['client_email_hash', '==', h]]).catch(() => []));
   }
   const byId = new Map((await Promise.all(lists)).flat().map((a) => [a.id, apptOut(a)]));
   return sortByStart([...byId.values()]).reverse();
@@ -687,10 +805,13 @@ export async function createAppointment(data) {
     if (data.client_ref && !ref) fail('Cliente não encontrado. Busque de novo na lista.');
     const name = ref ? ref.name : text(data.client_name, 120);
     if (!name) fail('Informe o nome do cliente.');
-    // Cliente com conta: o agendamento fica ligado à conta (aparece em "Meus agendamentos")
+    // Cliente com conta: o agendamento fica ligado à conta (aparece em "Meus agendamentos").
+    // Cliente do grupo: guarda só a referência; o contato fica em contacts/ (protegido).
     client = ref
-      ? { client_id: ref.uid, client_name: ref.name, client_phone: ref.phone, client_email: ref.email }
-      : { client_id: null, client_name: name, client_phone: text(data.client_phone, 40), client_email: text(data.client_email, 200).toLowerCase() };
+      ? { client_id: ref.uid, client_name: ref.name, client_phone: ref.phone, client_email: ref.email,
+        client_ref: ref.ref.startsWith('m:') ? ref.ref.slice(2) : '' }
+      : { client_id: null, client_name: name, client_phone: text(data.client_phone, 40), client_email: text(data.client_email, 200).toLowerCase(), client_ref: '' };
+    if (ref && !ref.ref.startsWith('m:')) client.client_ref = '';
     status = 'confirmado';
     const now = nowLocal();
     if (data.fit_in) {  // encaixe: fora da grade, mas sem conflito (checado na transação)
@@ -704,7 +825,7 @@ export async function createAppointment(data) {
     gid = session.groups[shared.findIndex((m) => m && m.role === 'profissional')]?.gid;
     if (!gid) fail('Você não faz parte de nenhum grupo deste atendente.', 403);
     const u = session.user;
-    client = { client_id: uid, client_name: u.name, client_phone: u.phone, client_email: u.email };
+    client = { client_id: uid, client_name: u.name, client_phone: u.phone, client_email: u.email, client_ref: `${gid}_${uid}` };
     status = prof.requires_confirmation ? 'pendente' : 'confirmado';
     if (!computeSlots({ prof, duration: service.duration_min, day, dayDoc, blocks }).includes(time)) {
       fail('Este horário não está mais disponível. Escolha outro.', 409);
@@ -713,13 +834,17 @@ export async function createAppointment(data) {
 
   const id = store.newId('appointments');
   const endTime = hhmm(end);
+  // Telefone/e-mail ficam fora do agendamento: em apptContacts (se digitados) ou em contacts/ (client_ref)
   const appt = {
     gid, professional_id: pid, professional_name: prof.name, professional_title: prof.title || '',
     professional_location: prof.location || '',
     service_id: data.service_id, service_name: service.name, duration_min: service.duration_min,
-    ...client, day, start: time, end: endTime, status, notes: text(data.notes, 1000),
+    client_id: client.client_id, client_name: client.client_name, client_ref: client.client_ref,
+    client_email_hash: await emailHash(client.client_email),
+    day, start: time, end: endTime, status, notes: text(data.notes, 1000),
     created_by: uid, created_at: nowIso(), updated_at: nowIso(),
   };
+  const ownContact = !client.client_ref && (client.client_phone || client.client_email);
   const dayPath = `professionals/${pid}/days/${day}`;
   await store.tx(async (t) => {
     const fresh = await t.get(dayPath);
@@ -727,14 +852,15 @@ export async function createAppointment(data) {
       fail('Este horário acabou de ser ocupado. Escolha outro.', 409);
     }
     t.set(`appointments/${id}`, appt);
+    if (ownContact) t.set(`apptContacts/${id}`, { professional_id: pid, client_phone: client.client_phone, client_email: client.client_email });
     t.set(dayPath, { busy: [...(fresh?.busy || []), { id, s: time, e: endTime, c: client.client_id }] });
   });
   // Sugestão de cliente sem conta para as próximas vezes (não essencial)
-  if (manager && !client.client_email && !data.client_ref) {
+  if (manager && canSeeContacts(pid) && !client.client_email && !data.client_ref) {
     store.set(`professionals/${pid}/clients/${clientKey(null, client.client_name, client.client_phone)}`,
       { name: client.client_name, phone: client.client_phone, email: '', last: `${day}T${time}` }).catch(() => {});
   }
-  return apptOut({ id, ...appt });
+  return apptOut({ id, ...appt, client_phone: client.client_phone, client_email: client.client_email });
 }
 
 /** Muda a situação, a anotação ou o horário (remarcar: só atendente/auxiliar). */
@@ -744,7 +870,8 @@ export async function updateAppointment(id, data) {
   if (!a) fail('Agendamento não encontrado.', 404);
   const pid = a.professional_id;
   const manager = isManager(pid);
-  const owner = a.client_id === uid || (a.client_email && a.client_email === store.email());
+  const owner = a.client_id === uid
+    || (a.client_email_hash && store.emailVerified() && a.client_email_hash === await emailHash(store.email()));
   if (!manager && !owner) fail('Agendamento não encontrado.', 404);
   if (a.status === 'cancelado') fail('Este agendamento já foi cancelado.');
 

@@ -6,9 +6,12 @@ rules_version = '2';
 // Perfis e grupos:
 //   - Administrador (e-mail cujo SHA-256 está abaixo, só com o e-mail confirmado): cria grupos, cadastra qualquer um, vê tudo.
 //   - Atendente (role 'profissional'): cadastra auxiliares e clientes nos seus grupos; vê os membros deles.
-//   - Auxiliar: cadastra clientes nos seus grupos; gerencia a agenda dos atendentes dos seus grupos.
+//   - Auxiliar: gerencia a agenda dos atendentes dos seus grupos. Por grupo, nível 'clientes' (secretaria:
+//     cadastra clientes e vê telefone/e-mail) ou 'agenda' (só agenda, vê apenas os nomes).
 //   - Cliente: entra num grupo pelo link de convite; agenda só com atendentes dos seus grupos.
-// O vínculo auxiliar ↔ atendente fica em staff/{pid}_{aux}, com a lista dos grupos em comum.
+// Telefone e e-mail NUNCA ficam em memberships nem em appointments: ficam em contacts/ e apptContacts/,
+// que o auxiliar "só agenda" não consegue ler.
+// staff/{pid}_{aux}: grupos em comum (acesso à agenda); fullstaff/{pid}_{aux}: idem, só onde o auxiliar é secretaria.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -18,6 +21,7 @@ service cloud.firestore {
     function groupDoc(gid) { return /databases/$(database)/documents/groups/$(gid); }
     function memberDoc(gid, uid) { return /databases/$(database)/documents/memberships/$(gid + '_' + uid); }
     function staffDoc(pid, aux) { return /databases/$(database)/documents/staff/$(pid + '_' + aux); }
+    function fullDoc(pid, aux) { return /databases/$(database)/documents/fullstaff/$(pid + '_' + aux); }
     function profDoc(pid) { return /databases/$(database)/documents/professionals/$(pid); }
     function apptDoc(id) { return /databases/$(database)/documents/appointments/$(id); }
     function dayDoc(pid, day) { return /databases/$(database)/documents/professionals/$(pid)/days/$(day); }
@@ -35,14 +39,19 @@ service cloud.firestore {
     // Participação em grupos
     function isMemberIn(gid) { return signedIn() && exists(memberDoc(gid, me())); }
     function roleIn(gid) { return get(memberDoc(gid, me())).data.role; }
+    function accessIn(gid) { return get(memberDoc(gid, me())).data.get('access', 'clientes'); }
     function isStaffIn(gid) { return isMemberIn(gid) && roleIn(gid) in ['profissional', 'auxiliar']; }
+    // Quem vê telefone/e-mail das pessoas do grupo: admin, atendente e auxiliar secretaria.
+    function contactLevelIn(gid) {
+      return isAdmin() || (isMemberIn(gid)
+        && (roleIn(gid) == 'profissional' || (roleIn(gid) == 'auxiliar' && accessIn(gid) != 'agenda')));
+    }
     // Quem pode pôr (ou tirar) alguém de perfil `role` no grupo
     // (auxiliar com nível 'agenda' só agenda: não cadastra nem retira ninguém)
     function canAddTo(gid, role) {
       return isAdmin() || (isMemberIn(gid)
         && ((roleIn(gid) == 'profissional' && role in ['auxiliar', 'cliente'])
-          || (roleIn(gid) == 'auxiliar' && role == 'cliente'
-            && get(memberDoc(gid, me())).data.get('access', 'clientes') != 'agenda')));
+          || (roleIn(gid) == 'auxiliar' && role == 'cliente' && accessIn(gid) != 'agenda')));
     }
     // Quem pode criar a conta (users) de outra pessoa com este perfil
     function canCreateRole(role) {
@@ -55,13 +64,20 @@ service cloud.firestore {
       return exists(staffDoc(pid, me())) && get(staffDoc(pid, me())).data.gids.size() > 0;
     }
     function isManager(pid) { return signedIn() && (me() == pid || isAdmin() || isAuxOf(pid)); }
+    // Quem vê os contatos dos clientes de um atendente: ele, o admin e as secretarias (fullstaff).
+    function canSeeContactsOf(pid) {
+      return signedIn() && (me() == pid || isAdmin()
+        || (exists(fullDoc(pid, me())) && get(fullDoc(pid, me())).data.gids.size() > 0));
+    }
 
     function verifiedEmail() { return signedIn() && request.auth.token.email_verified == true; }
-    // O cliente do agendamento: pela conta ou pelo e-mail (confirmado) informado pela secretaria.
+    // O cliente do agendamento: pela conta ou pelo hash do e-mail (confirmado) informado pela secretaria.
     function ownsAppt(a) {
       return signedIn() && (a.client_id == me()
-        || (verifiedEmail() && a.client_email != '' && a.client_email == request.auth.token.email));
+        || (verifiedEmail() && a.get('client_email_hash', '') != ''
+          && a.get('client_email_hash', '') == hashing.sha256(request.auth.token.email).toHexString().lower()));
     }
+    function noContactFields(d) { return !d.keys().hasAny(['email', 'phone', 'client_phone', 'client_email']); }
 
     // ---------------------------------------------------------------- contas
     match /users/{userId} {
@@ -96,12 +112,14 @@ service cloud.firestore {
       allow create, update: if isAdmin() && request.resource.data.name is string;
     }
 
+    // Participação: perfil, nome e nível — sem telefone/e-mail.
     match /memberships/{mid} {
       allow read: if signedIn() && (resource.data.uid == me() || isAdmin() || isStaffIn(resource.data.gid)
         || (isMemberIn(resource.data.gid) && resource.data.role == 'profissional'));
       allow create: if signedIn()
         && mid == request.resource.data.gid + '_' + request.resource.data.uid
         && exists(groupDoc(request.resource.data.gid))
+        && noContactFields(request.resource.data)
         && (
           // cliente sem conta (só nome e contato), cadastrado por quem pode cadastrar clientes no grupo
           (request.resource.data.get('no_account', false) == true
@@ -115,8 +133,10 @@ service cloud.firestore {
               // cliente entrando pelo convite
               || (request.resource.data.uid == me() && request.resource.data.role == 'cliente'))));
       allow update: if signedIn() && (
+          // nome (a própria pessoa ou o admin); também permite retirar telefone/e-mail antigos (migração)
           ((resource.data.uid == me() || isAdmin())
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'email', 'phone'])
+            && noContactFields(request.resource.data))
           // nível do auxiliar ('clientes' = secretaria, 'agenda' = só agenda), pelo atendente ou admin
           || (resource.data.role == 'auxiliar' && canAddTo(resource.data.gid, 'auxiliar')
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['access'])
@@ -124,12 +144,29 @@ service cloud.firestore {
       allow delete: if signedIn() && canAddTo(resource.data.gid, resource.data.role);
     }
 
+    // Telefone/e-mail de cada pessoa num grupo. O auxiliar "só agenda" não lê.
+    match /contacts/{cid} {
+      allow read: if signedIn() && (resource == null || resource.data.uid == me() || contactLevelIn(resource.data.gid));
+      allow create, update: if signedIn()
+        && cid == request.resource.data.gid + '_' + request.resource.data.uid
+        && request.resource.data.keys().hasOnly(['gid', 'uid', 'email', 'phone'])
+        && (request.resource.data.uid == me() || isAdmin()
+          || canAddTo(request.resource.data.gid, getAfter(memberDoc(request.resource.data.gid, request.resource.data.uid)).data.role));
+      allow delete: if signedIn() && (isAdmin()
+        || canAddTo(resource.data.gid, get(memberDoc(resource.data.gid, resource.data.uid)).data.role));
+    }
+
     // Vínculo auxiliar ↔ atendente: cada gravação acrescenta ou retira um grupo da lista.
     match /staff/{id} {
       allow read: if signedIn() && (resource.data.pid == me() || resource.data.aux == me() || isAdmin());
-      allow write: if signedIn() && staffChange(id);
+      allow write: if signedIn() && staffChange(id, false);
     }
-    function staffChange(id) {
+    // Mesmo vínculo, só nos grupos em que o auxiliar é secretaria: dá acesso aos contatos dos clientes.
+    match /fullstaff/{id} {
+      allow read: if signedIn() && (resource.data.pid == me() || resource.data.aux == me() || isAdmin());
+      allow write: if signedIn() && staffChange(id, true);
+    }
+    function staffChange(id, full) {
       let d = request.resource.data;
       let before = resource == null ? [] : resource.data.gids;
       let added = d.gids.removeAll(before);
@@ -141,7 +178,14 @@ service cloud.firestore {
         && (isAdmin() || (isMemberIn(g) && roleIn(g) == 'profissional'))
         && (removed.size() == 1
           || (getAfter(memberDoc(g, d.pid)).data.role == 'profissional'
-            && getAfter(memberDoc(g, d.aux)).data.role == 'auxiliar'));
+            && getAfter(memberDoc(g, d.aux)).data.role == 'auxiliar'
+            && (!full || getAfter(memberDoc(g, d.aux)).data.get('access', 'clientes') != 'agenda')));
+    }
+
+    // Migrações de dados feitas pelo admin
+    match /meta/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
     }
 
     // ---------------------------------------------------------- atendentes
@@ -163,8 +207,9 @@ service cloud.firestore {
         allow write: if isManager(pid);
       }
 
+      // Clientes já atendidos sem cadastro (nome + contato): só quem vê contatos.
       match /clients/{cid} {
-        allow read, write: if isManager(pid);
+        allow read, write: if canSeeContactsOf(pid);
       }
 
       // Horários ocupados do dia: [{id, s, e, c}] (c = uid do cliente ou null). Sem nomes.
@@ -196,11 +241,12 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------ agendamentos
+    // Só o nome do cliente; o contato fica em apptContacts/ ou em contacts/ (campo client_ref).
     match /appointments/{aid} {
       allow read: if ownsAppt(resource.data) || isManager(resource.data.professional_id);
 
-      allow create: if isManager(request.resource.data.professional_id)
-        || clientCreate(aid, request.resource.data);
+      allow create: if noContactFields(request.resource.data)
+        && (isManager(request.resource.data.professional_id) || clientCreate(aid, request.resource.data));
 
       allow update: if (isManager(resource.data.professional_id)
           && request.resource.data.professional_id == resource.data.professional_id)
@@ -209,6 +255,18 @@ service cloud.firestore {
           && request.resource.data.status == 'cancelado'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at']));
 
+      allow delete: if false;
+    }
+
+    // Telefone/e-mail digitados num agendamento (cliente sem cadastro). O auxiliar "só agenda" não lê.
+    match /apptContacts/{aid} {
+      allow read: if signedIn() && (resource == null || canSeeContactsOf(resource.data.professional_id));
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['professional_id', 'client_phone', 'client_email'])
+        && (isManager(request.resource.data.professional_id)
+          || getAfter(apptDoc(aid)).data.client_id == me());
+      allow update: if canSeeContactsOf(resource.data.professional_id)
+        && request.resource.data.professional_id == resource.data.professional_id;
       allow delete: if false;
     }
 

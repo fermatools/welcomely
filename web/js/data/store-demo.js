@@ -2,7 +2,7 @@
 // Mesma interface de store-firebase.js. Usado quando o Firebase não está configurado ou com ?demo.
 import { addDays, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, isoDate, minutes } from './logic.js';
 
-const KEY = 'welcomely-demo-v3';
+const KEY = 'welcomely-demo-v4';
 export const DEMO_PASSWORD = 'demo123';
 export const DEMO_ACCOUNTS = [
   ['admin@demo.welcomely', 'Administrador'],
@@ -33,21 +33,26 @@ function seed() {
       docs[`professionals/${uid}/services/${sid}`] = { name: sname, description, duration_min: duration, active: true };
     });
   };
-  const group = (gid, name, members) => {
+  // access: { uid: 'agenda' } para auxiliares que só agendam (padrão: secretaria)
+  const group = (gid, name, members, access = {}) => {
     docs[`groups/${gid}`] = { name, created_at: now };
     for (const uid of members) {
       const { name: pname, email, phone, role } = people[uid];
       docs[`memberships/${gid}_${uid}`] = {
-        gid, uid, role, name: pname, email, phone, group_name: name, added_by: 'u-admin', added_at: now,
+        gid, uid, role, name: pname, group_name: name, added_by: 'u-admin', added_at: now,
+        ...(role === 'auxiliar' ? { access: access[uid] || 'clientes' } : {}),
       };
+      docs[`contacts/${gid}_${uid}`] = { gid, uid, email, phone };
     }
-    // vínculo auxiliar ↔ atendente (o auxiliar gerencia a agenda dos atendentes do grupo)
+    // vínculo auxiliar ↔ atendente (agenda) e, para secretarias, acesso aos contatos (fullstaff)
     const profs = members.filter((u) => people[u].role === 'profissional');
     const auxs = members.filter((u) => people[u].role === 'auxiliar');
     for (const p of profs) {
       for (const a of auxs) {
-        const path = `staff/${p}_${a}`;
-        docs[path] = { pid: p, aux: a, gids: [...(docs[path]?.gids || []), gid] };
+        for (const kind of access[a] === 'agenda' ? ['staff'] : ['staff', 'fullstaff']) {
+          const path = `${kind}/${p}_${a}`;
+          docs[path] = { pid: p, aux: a, gids: [...(docs[path]?.gids || []), gid] };
+        }
       }
     }
   };
@@ -68,8 +73,7 @@ function seed() {
     bio: 'Atendimento pastoral, confissões e orientação espiritual.',
   }, [['s-pastoral', 'Atendimento pastoral', 30], ['s-confissao', 'Confissão', 15],
     ['s-batismo', 'Preparação para batismo', 60, 'Conversa com pais e padrinhos']]);
-  group('g-consultorio', 'Consultório Dra. Ana', ['u-ana', 'u-maria', 'u-paulo', 'u-carlos', 'u-bia']);
-  docs['memberships/g-consultorio_u-paulo'].access = 'agenda';   // auxiliar que só agenda
+  group('g-consultorio', 'Consultório Dra. Ana', ['u-ana', 'u-maria', 'u-paulo', 'u-carlos', 'u-bia'], { 'u-paulo': 'agenda' });
   group('g-paroquia', 'Paróquia São José', ['u-joao', 'u-ana', 'u-maria', 'u-carlos']);
 
   // Agendamentos no próximo dia útil
@@ -93,15 +97,17 @@ function seed() {
     docs[`appointments/${id}`] = {
       gid, professional_id: pid, professional_name: people[pid].name, professional_title: ptitle, professional_location: ploc,
       service_id: sid, service_name: services[sid], duration_min: minutes(e) - minutes(s),
-      client_id: cid, client_name: name, client_phone: phone, client_email: cid ? people[cid].email : '',
+      client_id: cid, client_name: name, client_ref: cid ? `${gid}_${cid}` : '', client_email_hash: '',
       day, start: s, end: e, status, notes: '', created_by: 'u-maria', created_at: now, updated_at: now,
     };
+    if (!cid) docs[`apptContacts/${id}`] = { professional_id: pid, client_phone: phone, client_email: '' };
     const dayPath = `professionals/${pid}/days/${day}`;
     docs[dayPath] = { busy: [...(docs[dayPath]?.busy || []), { id, s, e, c: cid }] };
     if (!cid) {
       docs[`professionals/${pid}/clients/${name.toLowerCase().replace(/\W+/g, '-')}`] = { name, phone, email: '', last: `${day}T${s}` };
     }
   }
+  docs['meta/migrations'] = { contacts_v1: now };
   return { docs, accounts, session: null };
 }
 
@@ -203,6 +209,11 @@ export function createDemoStore() {
     async set(path, data, merge) { await delay(); ops.set(path, data, merge); save(); },
     async update(path, data) { await delay(); ops.update(path, data); save(); },
     async remove(path) { await delay(); ops.remove(path); save(); },
+    async removeFields(path, keys) {
+      await delay();
+      if (db.docs[path]) keys.forEach((k) => delete db.docs[path][k]);
+      save();
+    },
     async tx(fn) {
       await delay();
       const backup = clone(db.docs);
