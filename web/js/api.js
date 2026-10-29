@@ -502,6 +502,12 @@ export async function removeMember(gid, uid) {
   const m = await store.get(`memberships/${gid}_${uid}`);
   if (!m) fail('Esta pessoa não está no grupo.', 404);
   if (!canAddIn(gid).includes(m.role)) fail('Você não pode retirar esta pessoa do grupo.', 403);
+  await dropMembership(m);
+}
+
+/** Tira a participação m (e os vínculos de agenda/contatos que ela dava). */
+async function dropMembership(m) {
+  const { gid, uid } = m;
   const members = await store.list('memberships', [['gid', '==', gid]]);
   if (m.role === 'auxiliar') {
     for (const p of members.filter((x) => x.role === 'profissional')) {
@@ -516,6 +522,77 @@ export async function removeMember(gid, uid) {
   }
   await store.remove(`contacts/${gid}_${uid}`);
   await store.remove(`memberships/${gid}_${uid}`);
+}
+
+/**
+ * Exclui uma pessoa (só o admin): tira de todos os grupos e apaga o cadastro. Sem o cadastro, a conta de login
+ * não dá mais acesso a nada; apagar o login em si só pelo console do Firebase (Authentication).
+ * Os agendamentos já feitos ficam no histórico.
+ */
+export async function deleteUser(uid) {
+  const me0 = requireUid();
+  if (!isAdmin()) fail('Apenas o administrador exclui pessoas.', 403);
+  if (uid === me0) fail('Você não pode excluir a própria conta.');
+  const user = await store.get(`users/${uid}`);
+  if (!user) fail('Pessoa não encontrada.', 404);
+  for (const m of await store.list('memberships', [['uid', '==', uid]])) await dropMembership(m);
+  if (user.role === 'profissional') await store.remove(`professionals/${uid}`);
+  if (user.email) await store.remove(`usersByEmail/${user.email}`);
+  await store.remove(`users/${uid}`);
+}
+
+/**
+ * Importa pessoas para um grupo (planilha ou contatos do celular). rows: [{name, email, phone, role, access}].
+ * Clientes sem conta entram como "sem conta" (não recebem e-mail); se o e-mail já tiver conta de cliente, entra a
+ * conta. Atendentes e auxiliares passam por addMember (conta nova recebe o e-mail para criar a senha).
+ * Lê o grupo uma vez só. onProgress(i, total). Devolve [{row, ok, msg}].
+ */
+export async function importMembers(gid, rows, onProgress = () => {}) {
+  const uid0 = requireUid();
+  const allowed = canAddIn(gid);
+  const group = await store.get(`groups/${gid}`);
+  if (!group) fail('Grupo não encontrado.', 404);
+  const [rawMembers, map] = await Promise.all([store.list('memberships', [['gid', '==', gid]]), groupContacts(gid)]);
+  if (map === null) fail('Sem permissão para ler os contatos do grupo (publique o firestore.rules novo).', 403);
+  const members = rawMembers.map((m) => withContact(m, map));
+  const emails = new Set(members.map((m) => m.email).filter(Boolean));
+  const phones = new Set(members.map((m) => phoneKey(m.phone)).filter(Boolean));
+  const results = [];
+  for (const [i, row] of rows.entries()) {
+    onProgress(i, rows.length);
+    const name = text(row.name, 120);
+    const email = text(row.email, 200).toLowerCase();
+    const phone = text(row.phone, 40);
+    const role = row.role || 'cliente';
+    const done = (ok, msg) => results.push({ row, ok, msg });
+    try {
+      if (!allowed.includes(role)) { done(false, `você não pode cadastrar ${ROLE_NAMES[role].toLowerCase()}`); continue; }
+      if (!name) { done(false, 'sem nome'); continue; }
+      if (email && !EMAIL_RE.test(email)) { done(false, 'e-mail inválido'); continue; }
+      if ((email && emails.has(email)) || (phone && phones.has(phoneKey(phone)))) { done(false, 'já está no grupo'); continue; }
+      if (role === 'cliente' && !(email && await store.get(`usersByEmail/${email}`))) {
+        if (!email && !phone) { done(false, 'sem telefone nem e-mail'); continue; }
+        const cid = `c_${store.newId('memberships')}`;
+        await store.tx(async (t) => {
+          t.set(`memberships/${gid}_${cid}`, {
+            gid, uid: cid, role: 'cliente', no_account: true, name, group_name: group.name, added_by: uid0, added_at: nowIso(),
+          });
+          t.set(...contactDoc(gid, cid, email, phone));
+        });
+        done(true, 'cliente sem conta');
+      } else {
+        if (!email) { done(false, `${ROLE_NAMES[role].toLowerCase()} precisa de e-mail`); continue; }
+        const res = await addMember(gid, { name, email, phone, role, access: row.access });
+        done(true, res.created ? 'conta criada (recebe e-mail para criar a senha)' : 'conta existente incluída');
+      }
+      if (email) emails.add(email);
+      if (phone) phones.add(phoneKey(phone));
+    } catch (err) {
+      done(false, err.message);
+    }
+  }
+  onProgress(rows.length, rows.length);
+  return results;
 }
 
 /** Cliente já logado que abriu o link de convite de outro grupo. */

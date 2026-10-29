@@ -464,3 +464,11 @@ ul.plain { margin: 0; padding-left: 18px; }
 #client-pick .btn, #new-client-fields .btn { margin-top: 6px; }
 .inline-select.small { margin: 6px 0 0; font-size: .85rem; }
 .inline-select.small select { min-height: 34px; padding: 4px 8px; font-size: .85rem; max-width: 100%; }
+
+/* Importar pessoas / excluir */
+.head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.person-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.import-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; margin: 8px 0; }
+.import-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font-weight: normal; }
+.import-row input { margin-top: 4px; }
+.import-row.bad { opacity: .75; border-style: dashed; }

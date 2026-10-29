@@ -2,6 +2,7 @@ import * as api from '../api.js';
 import { phoneMatches } from '../data/logic.js';
 import { go, loadMe, saveRedirect, state } from '../state.js';
 import { busy, confirmDialog, empty, esc, formData, icon, modal, spinner, toast } from '../ui.js';
+import { importDialog } from './importar.js';
 
 const ROLE_ORDER = ['profissional', 'auxiliar', 'cliente'];
 const ROLE_PLURAL = { profissional: 'Atendentes', auxiliar: 'Auxiliares', cliente: 'Clientes' };
@@ -87,7 +88,8 @@ export async function detail(el, gid) {
     <div class="page narrow">
       <p><a href="#/grupos">${icon('left')} Grupos</a></p>
       <div class="page-head"><h1>${esc(g.name)}</h1>
-        ${g.canAdd.length ? `<button class="btn primary" id="add">${icon('plus')} Adicionar pessoa</button>` : ''}</div>
+        ${g.canAdd.length ? `<div class="head-actions"><button class="btn" id="import">Importar</button>
+          <button class="btn primary" id="add">${icon('plus')} Adicionar pessoa</button></div>` : ''}</div>
       ${g.contactsError ? `<section class="card note"><p>Não foi possível ler telefones e e-mails deste grupo (sem permissão).
         Se você é o administrador, publique o arquivo <b>firestore.rules</b> novo no console do Firebase.</p></section>` : ''}
       <section class="card">
@@ -108,13 +110,16 @@ export async function detail(el, gid) {
                     <select data-access="${esc(m.uid)}">${Object.entries(api.AUX_ACCESS).map(([k, label]) => `
                       <option value="${k}"${(m.access || 'clientes') === k ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select></label>`
                 : `<br><span class="badge info">${esc(api.AUX_ACCESS[m.access || 'clientes'])}</span>`) : ''}</div>
-            ${g.canAdd.includes(m.role) && m.uid !== state.user.id
-              ? `<button class="btn small ghost danger" data-rm="${esc(m.uid)}" data-name="${esc(m.name)}">Retirar</button>` : ''}
+            ${g.canAdd.includes(m.role) && m.uid !== state.user.id ? `<div class="person-actions">
+              <button class="btn small ghost danger" data-rm="${esc(m.uid)}" data-name="${esc(m.name)}">Retirar</button>
+              ${g.myRole === 'admin' && !m.no_account
+                ? `<button class="btn small ghost danger" data-del="${esc(m.uid)}" data-name="${esc(m.name)}">Excluir</button>` : ''}</div>` : ''}
           </article>`).join('') : '<p class="muted small">Ninguém ainda.</p>'}</div>`).join('')}
     </div>`;
 
   el.querySelector('#share').addEventListener('click', () => share(`Convite: ${g.name}`, link));
   el.querySelector('#add')?.addEventListener('click', () => addForm(g, () => detail(el, gid)));
+  el.querySelector('#import')?.addEventListener('click', () => importDialog(g, () => detail(el, gid)));
   el.querySelector('.page').addEventListener('change', (e) => {
     const sel = e.target.closest('[data-access]');
     if (!sel) return;
@@ -124,6 +129,18 @@ export async function detail(el, gid) {
     });
   });
   el.querySelector('.page').addEventListener('click', async (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      if (!await confirmDialog(`Excluir ${del.dataset.name}? A pessoa sai de todos os grupos e o cadastro é apagado: `
+        + 'ela não consegue mais usar o app. Os agendamentos já feitos ficam no histórico. Não dá para desfazer.',
+      { okLabel: 'Excluir', danger: true })) return;
+      busy(del, async () => {
+        await api.deleteUser(del.dataset.del);
+        toast(`${del.dataset.name} foi excluída.`);
+        detail(el, gid);
+      });
+      return;
+    }
     const rm = e.target.closest('[data-rm]');
     if (!rm || !await confirmDialog(`Retirar ${rm.dataset.name} do grupo "${g.name}"? A conta continua existindo.`,
       { okLabel: 'Retirar', danger: true })) return;

@@ -1,4 +1,4 @@
-// Versão: 2026-10-27 15:23 (atualize a data e o horário a cada mudança neste arquivo)
+// Versão: 2026-10-29 08:33 (atualize a data e o horário a cada mudança neste arquivo)
 rules_version = '2';
 
 // Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
@@ -94,6 +94,7 @@ service cloud.firestore {
           || (me() != userId && request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
       allow update: if signedIn() && (me() == userId || isAdmin())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']);
+      allow delete: if isAdmin() && me() != userId;   // excluir pessoa
     }
 
     // Busca de conta pelo e-mail (só leitura direta, nunca listagem).
@@ -104,6 +105,7 @@ service cloud.firestore {
           || (request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
       allow update: if signedIn() && (resource.data.uid == me() || isAdmin())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
+      allow delete: if isAdmin() && resource.data.uid != me();
     }
 
     // ---------------------------------------------------------------- grupos
@@ -197,6 +199,7 @@ service cloud.firestore {
       // O atendente e o admin alteram tudo; o auxiliar só a grade semanal.
       allow update: if signedIn() && (me() == pid || isAdmin()
         || (isAuxOf(pid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability'])));
+      allow delete: if isAdmin() && me() != pid;   // excluir atendente (o histórico de agendamentos fica)
 
       match /services/{sid} {
         allow read: if signedIn();
