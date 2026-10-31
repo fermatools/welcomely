@@ -17,7 +17,7 @@ function profileSection(p) {
         Confirmar cada pedido antes de valer (senão, o agendamento é confirmado na hora)</label>
       <div class="row">
         <label>Antecedência mínima (horas)<input name="min_notice_hours" type="number" min="0" max="720" value="${p.min_notice_hours}"></label>
-        <label>Agendar até (dias à frente)<input name="max_days_ahead" type="number" min="1" max="365" value="${p.max_days_ahead}"></label>
+        <label>Clientes agendam até quantos dias à frente<input name="max_days_ahead" type="number" min="1" max="365" value="${p.max_days_ahead}"></label>
       </div>
       <div class="row">
         <label>Cancelamento pelo cliente até (horas antes)<input name="cancel_notice_hours" type="number" min="0" max="720" value="${p.cancel_notice_hours}"></label>
