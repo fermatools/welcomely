@@ -472,3 +472,5 @@ ul.plain { margin: 0; padding-left: 18px; }
 .import-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; font-weight: normal; }
 .import-row input { margin-top: 4px; }
 .import-row.bad { opacity: .75; border-style: dashed; }
+.day.off { opacity: .45; }
+.day.off.active { opacity: 1; }

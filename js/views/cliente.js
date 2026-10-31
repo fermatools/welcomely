@@ -5,7 +5,13 @@ import {
   addDays, busy, confirmDialog, empty, esc, fmtDay, fmtDuration, fmtRelativeDay, icon, nowStamp, parseDate,
   spinner, statusBadge, timeOf, toast, today,
 } from '../ui.js';
+import { rulesForDay } from '../data/logic.js';
 
+/** "hoje", "amanhã" ou "em seg., 2 de nov." */
+const whenText = (d) => {
+  const rel = fmtRelativeDay(d).toLowerCase();
+  return ['hoje', 'amanhã'].includes(rel) ? rel : `em ${rel}`;
+};
 const initials = (name) => name.replace(/^(Dra?|Pe|Pr|Sr|Sra)\.\s*/i, '').split(/\s+/).map((w) => w[0]).slice(0, 2).join('');
 
 function profCard(p) {
@@ -47,10 +53,15 @@ export async function search(el) {
 }
 
 export async function professionalPage(el, id) {
-  const { professional: p, services } = await api.getProfessional(id);
+  const { professional: p, availability, services } = await api.getProfessional(id);
   const manager = canManage(id);
-  const lastDay = addDays(today(), p.max_days_ahead);
-  const sel = { service: services[0]?.id ?? null, date: today(), time: null };
+  const ahead = Number(p.max_days_ahead) > 0 ? Number(p.max_days_ahead) : 60;
+  const lastDay = addDays(today(), ahead);
+  // Dias com regra de horário (os outros aparecem apagados); a página abre no primeiro deles
+  const isOpen = (d) => rulesForDay(availability, d).length > 0;
+  const openDays = [];
+  for (let d = today(); d <= lastDay && openDays.length < 60; d = addDays(d, 1)) if (isOpen(d)) openDays.push(d);
+  const sel = { service: services[0]?.id ?? null, date: openDays[0] || today(), time: null };
 
   el.innerHTML = `
     <div class="page narrow">
@@ -78,6 +89,9 @@ export async function professionalPage(el, id) {
       </section>
       <section class="step">
         <h2><span class="num">2</span> Dia</h2>
+        ${!availability.length ? '<p class="card note">Este atendente ainda não definiu os horários de atendimento.</p>'
+          : !openDays.length ? '<p class="card note">Não há dias de atendimento dentro do prazo de agendamento deste atendente.</p>' : ''}
+        ${ahead < 14 ? `<p class="muted small">Este atendente aceita agendamentos com até ${ahead} dia${ahead === 1 ? '' : 's'} de antecedência.</p>` : ''}
         <div class="day-strip" id="days"></div>
         <label class="inline-date">Outra data: <input type="date" id="pick-date" min="${today()}" max="${lastDay}"></label>
       </section>
@@ -103,11 +117,12 @@ export async function professionalPage(el, id) {
   const bookBtn = el.querySelector('#book');
 
   const renderDays = () => {
-    const days = Array.from({ length: Math.min(14, p.max_days_ahead + 1) }, (_, i) => addDays(today(), i));
+    const days = Array.from({ length: Math.min(14, ahead + 1) }, (_, i) => addDays(today(), i));
     if (!days.includes(sel.date)) days.push(sel.date);
     daysEl.innerHTML = days.map((d) => {
       const date = parseDate(d);
-      return `<button type="button" class="day${d === sel.date ? ' active' : ''}" data-date="${d}">
+      return `<button type="button" class="day${d === sel.date ? ' active' : ''}${isOpen(d) ? '' : ' off'}" data-date="${d}"
+        ${isOpen(d) ? '' : 'title="Sem atendimento neste dia"'}>
         <small>${date.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '')}</small>
         <b>${date.getDate()}</b><small>${date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}</small></button>`;
     }).join('');
@@ -132,9 +147,11 @@ export async function professionalPage(el, id) {
     try {
       const slots = await api.slots(id, sel.service, sel.date);
       if (mine !== seq) return;
+      const next = openDays.find((d) => d > sel.date);
       slotsEl.innerHTML = slots.length
         ? slots.map((t) => `<button type="button" class="slot" data-time="${t}">${t}</button>`).join('')
-        : `<p class="muted">Sem horários livres em ${fmtRelativeDay(sel.date).toLowerCase()}. Tente outro dia.</p>`;
+        : `<p class="muted">${isOpen(sel.date) ? 'Sem horários livres' : 'Sem atendimento'} ${whenText(sel.date)}.</p>
+          ${next ? `<button type="button" class="btn small" data-next="${next}">Ver ${esc(fmtDay(next).toLowerCase())}</button>` : ''}`;
     } catch (err) { slotsEl.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; }
   };
 
@@ -158,6 +175,13 @@ export async function professionalPage(el, id) {
     loadSlots();
   });
   slotsEl.addEventListener('click', (e) => {
+    const n = e.target.closest('[data-next]');
+    if (n) {
+      sel.date = n.dataset.next;
+      renderDays();
+      loadSlots();
+      return;
+    }
     const b = e.target.closest('[data-time]');
     if (!b) return;
     sel.time = b.dataset.time;

@@ -634,7 +634,8 @@ export async function listProfessionals(q = '') {
 export async function getProfessional(pid) {
   const [p, services] = await Promise.all([
     getProf(pid), store.list(`professionals/${pid}/services`, [['active', '==', true]])]);
-  return { professional: profileOut(p), services: services.map(serviceOut).sort(byName) };
+  // availability: para a tela do cliente mostrar quais dias têm atendimento
+  return { professional: profileOut(p), availability: p.availability || [], services: services.map(serviceOut).sort(byName) };
 }
 
 const PROFILE_INTS = { min_notice_hours: [0, 720], max_days_ahead: [1, 365], cancel_notice_hours: [0, 720], slot_interval_min: [5, 240] };
