@@ -474,3 +474,5 @@ ul.plain { margin: 0; padding-left: 18px; }
 .import-row.bad { opacity: .75; border-style: dashed; }
 .day.off { opacity: .45; }
 .day.off.active { opacity: 1; }
+.person.editable { cursor: pointer; }
+.person.editable:hover { border-color: var(--brand); }
