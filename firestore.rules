@@ -1,4 +1,4 @@
-// Versão: 2026-10-29 08:33 (atualize a data e o horário a cada mudança neste arquivo)
+// Versão: 2026-11-01 18:07 (atualize a data e o horário a cada mudança neste arquivo)
 rules_version = '2';
 
 // Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
@@ -92,8 +92,13 @@ service cloud.firestore {
             && isAdminEmail() && request.resource.data.created_by == me())
           // conta criada por quem cadastra
           || (me() != userId && request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
-      allow update: if signedIn() && (me() == userId || isAdmin())
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']);
+      allow update: if signedIn() && (
+          ((me() == userId || isAdmin())
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'phone']))
+          // mudar o perfil da conta (só o admin, nunca o próprio)
+          || (isAdmin() && me() != userId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+            && request.resource.data.role in ['profissional', 'auxiliar', 'cliente']));
       allow delete: if isAdmin() && me() != userId;   // excluir pessoa
     }
 
@@ -103,8 +108,12 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.role == getAfter(userDoc(request.resource.data.uid)).data.role
         && ((request.resource.data.uid == me() && email == request.auth.token.email)
           || (request.resource.data.created_by == me() && canCreateRole(request.resource.data.role)));
-      allow update: if signedIn() && (resource.data.uid == me() || isAdmin())
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']);
+      allow update: if signedIn() && (
+          ((resource.data.uid == me() || isAdmin())
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']))
+          || (isAdmin() && resource.data.uid != me()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role'])
+            && request.resource.data.role == getAfter(userDoc(resource.data.uid)).data.role));
       allow delete: if isAdmin() && resource.data.uid != me();
     }
 
@@ -143,7 +152,15 @@ service cloud.firestore {
           // nível do auxiliar ('clientes' = secretaria, 'agenda' = só agenda), pelo atendente ou admin
           || (resource.data.role == 'auxiliar' && canAddTo(resource.data.gid, 'auxiliar')
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['access'])
-            && request.resource.data.access in ['clientes', 'agenda']));
+            && request.resource.data.access in ['clientes', 'agenda'])
+          // nome do cliente sem conta, por quem cadastra clientes no grupo
+          || (resource.data.get('no_account', false) == true && canAddTo(resource.data.gid, 'cliente')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']))
+          // perfil (e nível do auxiliar) acompanhando o perfil da conta, pelo admin
+          || (isAdmin() && resource.data.get('no_account', false) != true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'access'])
+            && request.resource.data.role == get(userDoc(resource.data.uid)).data.role
+            && request.resource.data.get('access', 'clientes') in ['clientes', 'agenda']));
       allow delete: if signedIn() && canAddTo(resource.data.gid, resource.data.role);
     }
 

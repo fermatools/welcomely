@@ -101,7 +101,7 @@ export async function detail(el, gid) {
       ${ROLE_ORDER.map((r) => `
         <h2 class="section-title">${ROLE_PLURAL[r]} (${byRole(r).length})</h2>
         <div class="list">${byRole(r).length ? byRole(r).map((m) => `
-          <article class="card person">
+          <article class="card person${canEdit(g, m) ? ' editable' : ''}"${canEdit(g, m) ? ` data-edit="${esc(m.uid)}" tabindex="0" role="button"` : ''}>
             <span class="avatar">${esc(initials(m.name))}</span>
             <div><b>${esc(m.name)}</b>${m.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>
               <small class="muted">${esc([m.email, m.phone].filter(Boolean).join(' · '))}</small>
@@ -128,7 +128,15 @@ export async function detail(el, gid) {
       toast('Acesso do auxiliar alterado.');
     });
   });
+  const openEdit = (e) => {
+    const card = e.target.closest('[data-edit]');
+    if (!card || e.target.closest('button, select, label, a')) return false;
+    editForm(g, g.members.find((x) => x.uid === card.dataset.edit), () => detail(el, gid));
+    return true;
+  };
+  el.querySelector('.page').addEventListener('keydown', (e) => { if (e.key === 'Enter') openEdit(e); });
   el.querySelector('.page').addEventListener('click', async (e) => {
+    if (openEdit(e)) return;
     const del = e.target.closest('[data-del]');
     if (del) {
       if (!await confirmDialog(`Excluir ${del.dataset.name}? A pessoa sai de todos os grupos e o cadastro é apagado: `
@@ -150,6 +158,78 @@ export async function detail(el, gid) {
       detail(el, gid);
     });
   });
+}
+
+/** Pode abrir a edição desta pessoa? (quem pode cadastrá-la no grupo; nunca a si mesmo) */
+const canEdit = (g, m) => g.canAdd.includes(m.role) && m.uid !== state.user.id;
+
+const accessSelect = (current = 'clientes') => `<select name="access">${Object.entries(api.AUX_ACCESS).map(([k, label]) => `
+  <option value="${k}"${k === current ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
+
+function editForm(g, person, onDone) {
+  const admin = g.myRole === 'admin';
+  const roleOptions = (roles, current) => roles.map((r) => `<option value="${r}"${r === current ? ' selected' : ''}>${esc(api.ROLE_NAMES[r])}</option>`).join('');
+  const m = modal({
+    title: person.name,
+    submitLabel: 'Salvar',
+    body: person.no_account ? `
+      <p class="muted small">Cliente sem conta: só nome e contato, para agendar pela secretaria.</p>
+      <label>Nome completo<input name="name" maxlength="120" required value="${esc(person.name)}"></label>
+      <label>Telefone / WhatsApp<input name="phone" type="tel" value="${esc(person.phone)}"></label>
+      <label>E-mail<input name="email" type="email" value="${esc(person.email)}"></label>
+      <section class="card note">
+        <label class="check"><input type="checkbox" name="convert"> Criar conta para esta pessoa</label>
+        <div id="convert-box" hidden>
+          <p class="muted small">Precisa do e-mail. A pessoa recebe um e-mail para criar a senha (pode cair no spam) e passa a
+            ver os próprios agendamentos no app. Se o e-mail já tiver conta, a conta é usada.</p>
+          <label>Perfil<select name="role">${roleOptions(g.canAdd, 'cliente')}</select></label>
+          <label id="access-row" hidden>Acesso do auxiliar${accessSelect()}</label>
+        </div>
+      </section>` : `
+      <p><b>${esc(api.ROLE_NAMES[person.role])}</b> · ${esc(person.email)}</p>
+      ${g.contacts ? `<label>Telefone / WhatsApp <small class="muted">(neste grupo)</small>
+        <input name="phone" type="tel" value="${esc(person.phone)}"></label>` : ''}
+      ${admin ? `<label>Perfil da conta<select name="role">${roleOptions(['profissional', 'auxiliar', 'cliente'], person.role)}</select></label>
+        <label id="access-row" hidden>Acesso do auxiliar${accessSelect(person.access)}</label>
+        <p class="muted small" id="role-note" hidden>Cada conta tem um só perfil: a mudança vale em todos os grupos da pessoa.</p>`
+        : '<p class="muted small">Só o administrador muda o perfil de uma conta.</p>'}`,
+    onSubmit: async (form) => {
+      const f = form.elements;
+      if (person.no_account) {
+        if (f.convert.checked) {
+          const res = await api.convertToAccount(g.gid, person.uid, {
+            name: f.name.value, email: f.email.value, phone: f.phone.value, role: f.role.value, access: f.access?.value,
+          });
+          toast(res.created
+            ? (api.DEMO ? 'Conta criada (na demonstração a senha é demo123).' : 'Conta criada. A pessoa vai receber um e-mail para criar a senha (avise para olhar também o spam).')
+            : 'A pessoa passou a usar a conta que já existia com este e-mail.');
+        } else {
+          await api.updateMember(g.gid, person.uid, { name: f.name.value, phone: f.phone.value, email: f.email.value });
+          toast('Dados salvos.');
+        }
+      } else {
+        if (f.phone && f.phone.value !== person.phone) await api.updateMember(g.gid, person.uid, { phone: f.phone.value });
+        if (f.role && f.role.value !== person.role) {
+          await api.changeRole(person.uid, f.role.value, f.access?.value);
+          toast(`${person.name} agora é ${api.ROLE_NAMES[f.role.value].toLowerCase()}.`);
+        } else toast('Dados salvos.');
+      }
+      onDone();
+      return true;
+    },
+  });
+  const form = m.form;
+  const sync = () => {
+    const role = form.elements.role?.value;
+    const box = form.querySelector('#convert-box');
+    if (box) box.hidden = !form.elements.convert.checked;
+    const accessRow = form.querySelector('#access-row');
+    if (accessRow) accessRow.hidden = role !== 'auxiliar';
+    const note = form.querySelector('#role-note');
+    if (note) note.hidden = role === person.role;
+  };
+  form.addEventListener('change', sync);
+  sync();
 }
 
 function addForm(g, onDone) {

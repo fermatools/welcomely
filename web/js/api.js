@@ -509,19 +509,139 @@ export async function removeMember(gid, uid) {
 async function dropMembership(m) {
   const { gid, uid } = m;
   const members = await store.list('memberships', [['gid', '==', gid]]);
+  await unlinkRole(m, members);
+  await store.remove(`contacts/${gid}_${uid}`);
+  await store.remove(`memberships/${gid}_${uid}`);
+}
+
+/** Desfaz os vínculos auxiliar ↔ atendente que a participação m dava no grupo. */
+async function unlinkRole(m, members) {
+  const { gid, uid } = m;
   if (m.role === 'auxiliar') {
-    for (const p of members.filter((x) => x.role === 'profissional')) {
+    for (const p of members.filter((x) => x.role === 'profissional' && x.uid !== uid)) {
       await linkStaff(p.uid, uid, gid, false);
       await linkStaff(p.uid, uid, gid, false, 'fullstaff');
     }
   } else if (m.role === 'profissional') {
-    for (const a of members.filter((x) => x.role === 'auxiliar')) {
+    for (const a of members.filter((x) => x.role === 'auxiliar' && x.uid !== uid)) {
       await linkStaff(uid, a.uid, gid, false);
       await linkStaff(uid, a.uid, gid, false, 'fullstaff');
     }
   }
-  await store.remove(`contacts/${gid}_${uid}`);
-  await store.remove(`memberships/${gid}_${uid}`);
+}
+
+/** Cria os vínculos auxiliar ↔ atendente para quem tem o papel `role` no grupo. */
+async function linkRole(gid, uid, role, access, members) {
+  if (role === 'auxiliar') {
+    for (const p of members.filter((x) => x.role === 'profissional' && x.uid !== uid)) {
+      await linkStaff(p.uid, uid, gid, true);
+      if (access !== 'agenda') await linkStaff(p.uid, uid, gid, true, 'fullstaff');
+    }
+  } else if (role === 'profissional') {
+    for (const a of members.filter((x) => x.role === 'auxiliar' && x.uid !== uid)) {
+      await linkStaff(uid, a.uid, gid, true);
+      if (a.access !== 'agenda') await linkStaff(uid, a.uid, gid, true, 'fullstaff');
+    }
+  }
+}
+
+/**
+ * Edita uma pessoa do grupo. Cliente sem conta: nome, telefone e e-mail. Pessoa com conta: telefone neste grupo
+ * (nome e e-mail são da própria pessoa).
+ */
+export async function updateMember(gid, uid, { name, phone, email }) {
+  requireUid();
+  const m = await store.get(`memberships/${gid}_${uid}`);
+  if (!m) fail('Esta pessoa não está no grupo.', 404);
+  if (!canAddIn(gid).includes(m.role)) fail('Você não pode editar esta pessoa.', 403);
+  phone = text(phone, 40);
+  if (m.no_account) {
+    name = text(name, 120);
+    email = text(email, 200).toLowerCase();
+    if (!name) fail('Informe o nome.');
+    if (!phone && !email) fail('Informe o telefone ou o e-mail do cliente.');
+    if (email && !EMAIL_RE.test(email)) fail('E-mail inválido.');
+    await store.tx(async (t) => {
+      t.update(`memberships/${gid}_${uid}`, { name });
+      t.set(...contactDoc(gid, uid, email, phone));
+    });
+  } else {
+    const cur = await safeGet(`contacts/${gid}_${uid}`);
+    await store.set(...contactDoc(gid, uid, cur?.email || '', phone));
+  }
+}
+
+/**
+ * Cliente sem conta passa a ter conta (com o perfil escolhido): cria ou aproveita a conta do e-mail, troca a
+ * participação no grupo e passa os agendamentos dele para a conta. A pessoa recebe o e-mail para criar a senha.
+ */
+export async function convertToAccount(gid, cid, { name, email, phone, role: newRole = 'cliente', access }) {
+  requireUid();
+  const m = await store.get(`memberships/${gid}_${cid}`);
+  if (!m?.no_account) fail('Esta pessoa já tem conta.');
+  if (!canAddIn(gid).includes('cliente') || !canAddIn(gid).includes(newRole)) fail('Você não pode cadastrar este perfil neste grupo.', 403);
+  email = text(email, 200).toLowerCase();
+  if (!EMAIL_RE.test(email)) fail('Para criar a conta, informe o e-mail da pessoa.');
+  // tira o cadastro sem conta antes (senão o e-mail/telefone conta como duplicado)
+  const contact = await safeGet(`contacts/${gid}_${cid}`);
+  await store.remove(`contacts/${gid}_${cid}`);
+  await store.remove(`memberships/${gid}_${cid}`);
+  let res;
+  try {
+    res = await addMember(gid, { name: name || m.name, email, phone, role: newRole, access });
+  } catch (err) {
+    // desfaz: volta o cadastro sem conta
+    await store.tx(async (t) => {
+      const { id: _id, ...data } = m;
+      t.set(`memberships/${gid}_${cid}`, data);
+      if (contact) t.set(`contacts/${gid}_${cid}`, { gid, uid: cid, email: contact.email || '', phone: contact.phone || '' });
+    }).catch(() => {});
+    throw err;
+  }
+  // agendamentos que apontavam para o cadastro sem conta passam a ser da conta
+  const user = await store.get(`usersByEmail/${email}`);
+  const pids = session.manages.map((p) => p.id).slice(0, 30);
+  if (user && pids.length) {
+    const appts = await store.list('appointments', [['client_ref', '==', `${gid}_${cid}`], ['professional_id', 'in', pids]]);
+    const hash = await emailHash(email);
+    for (const a of appts) {
+      await store.update(`appointments/${a.id}`, {
+        client_id: user.uid, client_ref: `${gid}_${user.uid}`, client_email_hash: hash, updated_at: nowIso(),
+      });
+    }
+  }
+  return res;
+}
+
+/**
+ * Muda o perfil de uma conta (só o admin). Cada conta tem um só perfil: muda em todos os grupos dela,
+ * refazendo os vínculos de agenda. Novo atendente ganha perfil de atendimento (se ainda não tinha).
+ */
+export async function changeRole(uid, newRole, access = 'clientes') {
+  const me0 = requireUid();
+  if (!isAdmin()) fail('Apenas o administrador muda o perfil de uma conta.', 403);
+  if (uid === me0) fail('Você não pode mudar o seu próprio perfil.');
+  if (!['profissional', 'auxiliar', 'cliente'].includes(newRole)) fail('Perfil inválido.');
+  const user = await store.get(`users/${uid}`);
+  if (!user) fail('Pessoa não encontrada.', 404);
+  if (user.role === newRole) return;
+  const mships = await store.list('memberships', [['uid', '==', uid]]);
+  const hasProf = newRole === 'profissional' && await store.get(`professionals/${uid}`);
+  await store.tx(async (t) => {
+    t.update(`users/${uid}`, { role: newRole });
+    t.update(`usersByEmail/${user.email}`, { role: newRole });
+    if (newRole === 'profissional' && !hasProf) {
+      t.set(`professionals/${uid}`, { ...DEFAULT_PROFILE, name: user.name, availability: DEFAULT_AVAILABILITY });
+      t.set(`professionals/${uid}/services/${store.newId(`professionals/${uid}/services`)}`,
+        { name: 'Atendimento', description: '', duration_min: 30, active: true });
+    }
+  });
+  for (const m of mships) {
+    const members = await store.list('memberships', [['gid', '==', m.gid]]);
+    await unlinkRole(m, members);
+    await store.update(`memberships/${m.gid}_${uid}`, newRole === 'auxiliar' ? { role: newRole, access } : { role: newRole });
+    await linkRole(m.gid, uid, newRole, access, members);
+  }
 }
 
 /**
