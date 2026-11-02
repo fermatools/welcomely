@@ -142,6 +142,10 @@ main.bare { padding-bottom: 32px; }
 .btn.primary.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn.small { min-height: 34px; padding: 4px 10px; font-size: .88rem; border-radius: 10px; }
 .btn.block { width: 100%; }
+/* Input de arquivo invisível por cima do botão: o toque cai direto nele (o Firefox do Android não abre
+   o seletor por um input escondido com display:none). */
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
 .btn.loading { position: relative; color: transparent !important; }
 .btn.loading::after {
   content: ""; position: absolute; width: 18px; height: 18px; border-radius: 50%;

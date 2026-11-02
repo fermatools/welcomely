@@ -124,8 +124,8 @@ export function importDialog(g, onDone) {
         e <b>acesso</b> do auxiliar ("agenda" = só agenda).</p>
       <p class="muted small">Também serve o arquivo exportado do Google Contatos (contacts.google.com → Exportar → CSV do Google).
         Clientes entram como <b>sem conta</b> (não recebem e-mail); quem já está no grupo, pelo e-mail ou telefone, é ignorado.</p>
-      <label class="btn block">${icon('plus')} Escolher planilha
-        <input type="file" id="file" accept=".csv,.txt,.xlsx,.xls,.ods" hidden></label>
+      <label class="btn block file-btn">${icon('plus')} Escolher planilha
+        <input type="file" id="file" aria-label="Escolher planilha"></label>
       ${canPickContacts() && g.canAdd.includes('cliente')
         ? `<button type="button" class="btn block" id="contacts">${icon('users')} Escolher dos contatos do celular</button>` : ''}
       <p class="center small"><a href="#" id="model">Baixar planilha modelo</a></p>`,
@@ -141,8 +141,15 @@ export function importDialog(g, onDone) {
     }
   };
   m.el.querySelector('#file').addEventListener('change', (e) => {
+    // Sem "accept" no input: o Firefox do Android às vezes não abre o seletor com filtro por extensão.
     const file = e.target.files[0];
-    if (file) start(async () => rowsToPeople(await readFile(file)));
+    e.target.value = '';   // permite escolher o mesmo arquivo de novo
+    if (!file) return;
+    if (!/\.(csv|txt|xlsx|xls|ods)$/i.test(file.name)) {
+      toast('Escolha uma planilha Excel (.xlsx, .xls, .ods) ou CSV.', 'error');
+      return;
+    }
+    start(async () => rowsToPeople(await readFile(file)));
   });
   m.el.querySelector('#contacts')?.addEventListener('click', () => start(pickContacts));
   m.el.querySelector('#model').addEventListener('click', (e) => { e.preventDefault(); downloadModel(); });
