@@ -13,6 +13,8 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -26,6 +28,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -37,6 +40,12 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var errorView: View
+
+    private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data))
+        fileCallback = null
+    }
 
     private val prefs by lazy { getSharedPreferences("welcomely", MODE_PRIVATE) }
 
@@ -55,6 +64,7 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.TRANSPARENT)
             addJavascriptInterface(Bridge(), "WelcomelyAndroid")
             webViewClient = Client()
+            webChromeClient = Chrome()
         }
         errorView = buildErrorView()
 
@@ -114,6 +124,30 @@ class MainActivity : ComponentActivity() {
             if (request.isForMainFrame) {
                 webView.visibility = View.INVISIBLE
                 errorView.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    /** Abre o seletor de arquivos do aparelho para os <input type=file> (ex.: importar planilha). */
+    private inner class Chrome : WebChromeClient() {
+        override fun onShowFileChooser(
+            view: WebView,
+            callback: ValueCallback<Array<Uri>>,
+            params: FileChooserParams,
+        ): Boolean {
+            fileCallback?.onReceiveValue(null)
+            fileCallback = callback
+            val pick = Intent(Intent.ACTION_GET_CONTENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"  // planilhas têm tipos MIME variados; o app web confere a extensão
+            }
+            return try {
+                fileChooser.launch(pick)
+                true
+            } catch (e: ActivityNotFoundException) {
+                fileCallback = null
+                Toast.makeText(this@MainActivity, R.string.no_app, Toast.LENGTH_SHORT).show()
+                false
             }
         }
     }
