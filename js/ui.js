@@ -129,7 +129,8 @@ export function modal({ title, body, submitLabel, onSubmit, wide = false }) {
   dialog.addEventListener('click', (e) => {
     if (e.target === dialog || e.target.closest('[data-close]')) close();
   });
-  dialog.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  // Só o Esc do próprio diálogo: o "cancel" de um <input type=file> (seletor fechado) também sobe até aqui.
+  dialog.addEventListener('cancel', (e) => { if (e.target !== dialog) return; e.preventDefault(); close(); });
   const form = dialog.querySelector('form');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
