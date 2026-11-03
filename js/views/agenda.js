@@ -442,8 +442,18 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
     form.querySelector('#new-client')?.addEventListener('click', startNew);
     form.querySelector('#back-to-list').addEventListener('click', () => { creating = false; fields.hidden = true; pick.hidden = false; });
     renderList();
+    if (preset.clientRef) {   // aberto a partir do cliente (tela do grupo)
+      const uid = preset.clientRef.split('_').slice(1).join('_');
+      const c = clients.find((x) => x.ref === `m:${preset.clientRef}`) || clients.find((x) => x.uid && x.uid === uid);
+      if (c) choose(c);
+    }
   }
   loadSlots();
+}
+
+/** Novo agendamento já com o cliente escolhido (ref = "gid_uid" da participação no grupo). */
+export function bookForClient(pid, ref, onDone = () => {}) {
+  return appointmentForm(pid, null, onDone, { clientRef: ref });
 }
 
 function noteForm(appt, onDone) {

@@ -2,6 +2,7 @@ import * as api from '../api.js';
 import { phoneMatches } from '../data/logic.js';
 import { go, loadMe, saveRedirect, state } from '../state.js';
 import { busy, confirmDialog, empty, esc, formData, icon, modal, spinner, toast } from '../ui.js';
+import { bookForClient } from './agenda.js';
 import { importDialog } from './importar.js';
 
 const ROLE_ORDER = ['profissional', 'auxiliar', 'cliente'];
@@ -101,7 +102,7 @@ export async function detail(el, gid) {
       ${ROLE_ORDER.map((r) => `
         <h2 class="section-title">${ROLE_PLURAL[r]} (${byRole(r).length})</h2>
         <div class="list">${byRole(r).length ? byRole(r).map((m) => `
-          <article class="card person${canEdit(g, m) ? ' editable' : ''}"${canEdit(g, m) ? ` data-edit="${esc(m.uid)}" tabindex="0" role="button"` : ''}>
+          <article class="card person${canOpen(g, m) ? ' editable' : ''}"${canOpen(g, m) ? ` data-edit="${esc(m.uid)}" tabindex="0" role="button"` : ''}>
             <span class="avatar">${esc(initials(m.name))}</span>
             <div><b>${esc(m.name)}</b>${m.no_account ? ' <span class="badge muted">sem conta</span>' : ''}<br>
               <small class="muted">${esc([m.email, m.phone].filter(Boolean).join(' · '))}</small>
@@ -131,7 +132,7 @@ export async function detail(el, gid) {
   const openEdit = (e) => {
     const card = e.target.closest('[data-edit]');
     if (!card || e.target.closest('button, select, label, a')) return false;
-    editForm(g, g.members.find((x) => x.uid === card.dataset.edit), () => detail(el, gid));
+    personMenu(g, g.members.find((x) => x.uid === card.dataset.edit), () => detail(el, gid));
     return true;
   };
   el.querySelector('.page').addEventListener('keydown', (e) => { if (e.key === 'Enter') openEdit(e); });
@@ -162,6 +163,31 @@ export async function detail(el, gid) {
 
 /** Pode abrir a edição desta pessoa? (quem pode cadastrá-la no grupo; nunca a si mesmo) */
 const canEdit = (g, m) => g.canAdd.includes(m.role) && m.uid !== state.user.id;
+
+/** Atendentes do grupo cuja agenda eu gerencio: posso agendar clientes com eles. */
+const bookablePros = (g) => g.members.filter((x) => x.role === 'profissional' && state.manages.some((p) => p.id === x.uid));
+const canBook = (g, m) => m.role === 'cliente' && bookablePros(g).length > 0;
+const canOpen = (g, m) => canEdit(g, m) || canBook(g, m);
+
+/** Toque numa pessoa: agendar (cliente, para quem gerencia a agenda) e/ou editar os dados. */
+function personMenu(g, person, onDone) {
+  const pros = canBook(g, person) ? bookablePros(g) : [];
+  const edit = canEdit(g, person);
+  const ref = `${g.gid}_${person.uid}`;
+  if (!edit && pros.length === 1) { bookForClient(pros[0].uid, ref); return; }
+  if (!pros.length) { editForm(g, person, onDone); return; }
+  const m = modal({
+    title: person.name,
+    body: `<div class="list">${pros.map((p) => `
+        <button type="button" class="btn block primary" data-book="${esc(p.uid)}">${icon('calendar')} Agendar${pros.length > 1 ? ` com ${esc(p.name)}` : ''}</button>`).join('')}
+      ${edit ? `<button type="button" class="btn block" id="edit-person">${icon('user')} Editar dados</button>` : ''}</div>`,
+  });
+  m.el.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-book]');
+    if (b) { m.close(); bookForClient(b.dataset.book, ref); return; }
+    if (e.target.closest('#edit-person')) { m.close(); editForm(g, person, onDone); }
+  });
+}
 
 const accessSelect = (current = 'clientes') => `<select name="access">${Object.entries(api.AUX_ACCESS).map(([k, label]) => `
   <option value="${k}"${k === current ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
