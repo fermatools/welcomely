@@ -22,7 +22,7 @@ import { ADMIN_EMAIL_SHA256 } from './config.js';
 import { firebaseConfig } from './firebase-config.js';
 import {
   addDays, busyIntervals, computeSlots, DATE_RE, DEFAULT_AVAILABILITY, DEFAULT_PROFILE, minutes, nowLocal,
-  overlaps, phoneKey, phoneMatches, STATUSES, TIME_RE, upgradeRules, validateAvailability,
+  overlaps, phoneKey, phoneMatches, SERIES_FREQS, seriesDates, STATUSES, TIME_RE, upgradeRules, validateAvailability,
 } from './data/logic.js';
 
 export const DEMO = new URLSearchParams(location.search).has('demo') || !firebaseConfig.apiKey;
@@ -1049,6 +1049,7 @@ export async function createAppointment(data) {
     day, start: time, end: endTime, status, notes: text(data.notes, 1000),
     created_by: uid, created_at: nowIso(), updated_at: nowIso(),
   };
+  if (manager && data.series_id) Object.assign(appt, { series_id: text(data.series_id, 40), series_label: text(data.series_label, 80) });
   const ownContact = !client.client_ref && (client.client_phone || client.client_email);
   const dayPath = `professionals/${pid}/days/${day}`;
   await store.tx(async (t) => {
@@ -1066,6 +1067,39 @@ export async function createAppointment(data) {
       { name: client.client_name, phone: client.client_phone, email: '', last: `${day}T${time}` }).catch(() => {});
   }
   return apptOut({ id, ...appt, client_phone: client.client_phone, client_email: client.client_email });
+}
+
+/**
+ * Agendamento periódico (atendente/auxiliar): cria um agendamento por data da série, com o mesmo cliente, serviço e
+ * horário. Datas com o horário ocupado (ou fora da grade, sem encaixe) ficam de fora e voltam com o motivo.
+ * Devolve [{ date, ok, appt?, msg? }].
+ */
+export async function createSeries(data, freq, count, label = '') {
+  requireManager(data.professional_id);
+  if (!SERIES_FREQS.includes(freq)) fail('Repetição inválida.');
+  const n = Math.round(Number(count));
+  if (!(n >= 2 && n <= 52)) fail('Informe de 2 a 52 repetições.');
+  const seriesId = store.newId('appointments');
+  const results = [];
+  for (const date of seriesDates(data.date, freq, n)) {   // uma de cada vez: cada uma é uma transação no dia
+    try {
+      results.push({ date, ok: true, appt: await createAppointment({ ...data, date, series_id: seriesId, series_label: label }) });
+    } catch (err) {
+      const taken = err.status === 409 && !data.fit_in;
+      results.push({ date, ok: false, msg: taken ? 'horário ocupado ou fora dos horários de atendimento' : err.message });
+    }
+  }
+  return results;
+}
+
+/** Cancela este agendamento e os seguintes da mesma série (os ainda pendentes/confirmados). Devolve quantos. */
+export async function cancelSeriesFrom(appt) {
+  requireManager(appt.professional_id);
+  if (!appt.series_id) fail('Este agendamento não faz parte de uma série.');
+  const all = await store.list('appointments', [['professional_id', '==', appt.professional_id], ['series_id', '==', appt.series_id]]);
+  const next = all.filter((a) => a.day >= appt.day && ['pendente', 'confirmado'].includes(a.status));
+  for (const a of next) await updateAppointment(a.id, { status: 'cancelado' });
+  return next.length;
 }
 
 /** Muda a situação, a anotação ou o horário (remarcar: só atendente/auxiliar). */

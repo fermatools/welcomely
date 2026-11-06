@@ -133,6 +133,44 @@ export function ruleApplies(rule, day) {
   return r.week_of_month === -1 ? d.getDate() + 7 > daysInMonth : n === r.week_of_month;
 }
 
+// Agendamento periódico: freq 'w1'..'w4' (a cada N semanas) ou 'm' (todo mês, mesma ocorrência do dia da
+// semana: 2ª quinta, …; a partir do dia 29 vale "a última").
+export const SERIES_FREQS = ['w1', 'w2', 'w3', 'w4', 'm'];
+
+/** Datas de uma série a partir de `first` (incluída), `count` ao todo. */
+export function seriesDates(first, freq, count) {
+  if (freq.startsWith('w')) return Array.from({ length: count }, (_, i) => addDays(first, i * 7 * Number(freq.slice(1))));
+  const d0 = parseDate(first);
+  const wd = d0.getDay();
+  const nth = d0.getDate() > 28 ? -1 : Math.ceil(d0.getDate() / 7);
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    const y = d0.getFullYear();
+    const m = d0.getMonth() + k;
+    let day;
+    if (nth === -1) {
+      const last = new Date(y, m + 1, 0);
+      day = new Date(y, m, last.getDate() - ((last.getDay() - wd + 7) % 7));
+    } else {
+      const firstOf = new Date(y, m, 1);
+      day = new Date(y, m, 1 + ((wd - firstOf.getDay() + 7) % 7) + (nth - 1) * 7);
+    }
+    out.push(isoDate(day));
+  }
+  return out;
+}
+
+/** Descrição da repetição: "toda quinta-feira", "a cada 2 semanas, na quinta-feira", "toda 2ª quinta-feira do mês". */
+export function seriesLabel(first, freq) {
+  const name = parseDate(first).toLocaleDateString('pt-BR', { weekday: 'long' });
+  const fem = !/sábado|domingo/.test(name);
+  if (freq === 'w1') return `${fem ? 'toda' : 'todo'} ${name}`;
+  if (freq.startsWith('w')) return `a cada ${freq.slice(1)} semanas, ${fem ? 'na' : 'no'} ${name}`;
+  const date = parseDate(first).getDate();
+  return date > 28 ? `${fem ? 'toda última' : 'todo último'} ${name} do mês`
+    : `${fem ? 'toda' : 'todo'} ${Math.ceil(date / 7)}${fem ? 'ª' : 'º'} ${name} do mês`;
+}
+
 /**
  * Converte a grade antiga ({weekday, start_time, end_time}, um registro por dia) em regras semanais,
  * juntando os dias que têm o mesmo horário. Regras no formato novo passam sem mudança.
