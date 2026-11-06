@@ -118,6 +118,10 @@ export async function detail(el, gid) {
           </article>`).join('') : '<p class="muted small">Ninguém ainda.</p>'}</div>`).join('')}
     </div>`;
 
+  // Recria vínculos auxiliar ↔ atendente que tenham ficado faltando (sem eles a secretaria não vê a agenda)
+  api.repairStaffLinks(gid).then((n) => {
+    if (n) toast(n === 1 ? 'Acesso de 1 auxiliar à agenda corrigido.' : `Acesso de ${n} auxiliares à agenda corrigido.`);
+  }).catch((err) => console.warn('vínculos', err));
   el.querySelector('#share').addEventListener('click', () => share(`Convite: ${g.name}`, link));
   el.querySelector('#add')?.addEventListener('click', () => addForm(g, () => detail(el, gid)));
   el.querySelector('#import')?.addEventListener('click', () => importDialog(g, () => detail(el, gid)));

@@ -1,4 +1,4 @@
-// Versão: 2026-11-01 18:07 (atualize a data e o horário a cada mudança neste arquivo)
+// Versão: 2026-11-06 13:37 (atualize a data e o horário a cada mudança neste arquivo)
 rules_version = '2';
 
 // Regras do Firestore do Welcomely. Copiar para: Console do Firebase → Firestore Database → Regras → Publicar.
@@ -178,12 +178,14 @@ service cloud.firestore {
 
     // Vínculo auxiliar ↔ atendente: cada gravação acrescenta ou retira um grupo da lista.
     match /staff/{id} {
-      allow read: if signedIn() && (resource.data.pid == me() || resource.data.aux == me() || isAdmin());
+      // resource == null: o vínculo ainda não existe (o atendente lê antes de criar, na transação)
+      allow read: if signedIn() && (resource == null || resource.data.pid == me() || resource.data.aux == me() || isAdmin());
       allow write: if signedIn() && staffChange(id, false);
     }
     // Mesmo vínculo, só nos grupos em que o auxiliar é secretaria: dá acesso aos contatos dos clientes.
     match /fullstaff/{id} {
-      allow read: if signedIn() && (resource.data.pid == me() || resource.data.aux == me() || isAdmin());
+      // resource == null: o vínculo ainda não existe (o atendente lê antes de criar, na transação)
+      allow read: if signedIn() && (resource == null || resource.data.pid == me() || resource.data.aux == me() || isAdmin());
       allow write: if signedIn() && staffChange(id, true);
     }
     function staffChange(id, full) {

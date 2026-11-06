@@ -487,6 +487,29 @@ export async function addMember(gid, { name, email, phone, role: newRole, no_acc
   return { created };
 }
 
+/**
+ * Confere os vínculos auxiliar ↔ atendente do grupo e cria os que faltam (por exemplo, quando o cadastro da
+ * secretaria terminou com erro depois de gravar a participação). Admin confere todos; o atendente, os seus.
+ * Devolve quantos auxiliares foram corrigidos.
+ */
+export async function repairStaffLinks(gid) {
+  const uid = requireUid();
+  const role = roleIn(gid);
+  if (!['admin', 'profissional'].includes(role)) return 0;
+  const members = await store.list('memberships', [['gid', '==', gid]]);
+  const profs = members.filter((m) => m.role === 'profissional' && (role === 'admin' || m.uid === uid));
+  const fixed = new Set();
+  for (const p of profs) {
+    for (const a of members.filter((m) => m.role === 'auxiliar' && m.uid !== p.uid)) {
+      const [st, full] = await Promise.all([safeGet(`staff/${p.uid}_${a.uid}`), safeGet(`fullstaff/${p.uid}_${a.uid}`)]);
+      if (!st?.gids?.includes(gid)) { await linkStaff(p.uid, a.uid, gid, true); fixed.add(a.uid); }
+      const wantFull = (a.access || 'clientes') !== 'agenda';
+      if (wantFull !== Boolean(full?.gids?.includes(gid))) { await linkStaff(p.uid, a.uid, gid, wantFull, 'fullstaff'); fixed.add(a.uid); }
+    }
+  }
+  return fixed.size;
+}
+
 /** Muda o nível de um auxiliar no grupo (atendente ou admin). */
 export async function setAuxAccess(gid, uid, access) {
   requireUid();
