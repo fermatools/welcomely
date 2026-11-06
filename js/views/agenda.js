@@ -1,6 +1,6 @@
 import * as api from '../api.js';
 import { addToCalendar, downloadIcs, eventFor } from '../calendar.js';
-import { blockIntervals, hhmm, whatsappDigits } from '../data/logic.js';
+import { blockIntervals, hhmm, seriesDates, seriesLabel, whatsappDigits } from '../data/logic.js';
 import { notifyClient } from '../notify.js';
 import { currentPid, setPid, state } from '../state.js';
 import {
@@ -63,7 +63,7 @@ function apptCard(a, { withDate = false, contacts = true } = {}) {
         <b>${timeOf(a.starts_at)}</b><small>${timeOf(a.ends_at)}</small></div>
       <div class="appt-main">
         <div class="appt-top"><b>${esc(a.client_name)}</b>${statusBadge(a.status, true)}</div>
-        <div>${esc(a.service_name)}</div>
+        <div>${esc(a.service_name)}${a.series_id ? ` <span class="badge muted" title="Agendamento periódico">↻ ${esc(a.series_label || 'série')}</span>` : ''}</div>
         ${contacts && (a.client_phone || a.client_email) ? `<small class="contact">
           ${a.client_phone ? `<a href="tel:${esc(a.client_phone)}">${icon('phone')} ${esc(a.client_phone)}</a>` : ''}
           ${wa ? `<a href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
@@ -164,7 +164,17 @@ export async function agenda(el) {
     if (act === 'avisar') return notifyClient(appt, 'confirmado');
     if (act === 'nota') return noteForm(appt, rerender);
     if (act === 'agenda') return addToCalendar(eventFor(appt, false));
-    if (act === 'cancelado' && !await confirmDialog(
+    if (act === 'cancelado' && appt.series_id && appt.status === 'confirmado') {
+      const which = await cancelChoice(appt);
+      if (!which) return undefined;
+      if (which === 'series') {
+        return busy(b, async () => {
+          const n = await api.cancelSeriesFrom(appt);
+          toast(n === 1 ? '1 atendimento cancelado.' : `${n} atendimentos cancelados.`);
+          rerender();
+        });
+      }
+    } else if (act === 'cancelado' && !await confirmDialog(
       `${appt.status === 'pendente' ? 'Recusar' : 'Cancelar'} o atendimento de ${appt.client_name}?`,
       { okLabel: appt.status === 'pendente' ? 'Recusar' : 'Cancelar atendimento', danger: true })) return undefined;
     return busy(b, async () => {
@@ -306,6 +316,17 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
       <label>Serviço<select name="service_id">${services.map((s) => `
         <option value="${s.id}"${s.id === sid0 ? ' selected' : ''}>${esc(s.name)} (${fmtDuration(s.duration_min)})</option>`).join('')}</select></label>`}
       <label>Data<input name="date" type="date" required value="${startDate}"></label>
+      ${reschedule ? '' : `<div class="row">
+        <label>Repetir<select name="repeat">
+          <option value="">Não repetir</option>
+          <option value="w1">Toda semana</option>
+          <option value="w2">A cada 2 semanas (quinzenal)</option>
+          <option value="w3">A cada 3 semanas</option>
+          <option value="w4">A cada 4 semanas</option>
+          <option value="m">Todo mês</option></select></label>
+        <label id="count-wrap" hidden>Quantas vezes<input name="count" type="number" min="2" max="52" value="4" inputmode="numeric"></label>
+      </div>
+      <p id="repeat-hint" class="muted small" hidden></p>`}
       <div class="field">
         <span class="field-label">Horário</span>
         <div class="slots compact" id="f-slots"></div>
@@ -350,6 +371,16 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
         toast('Escolha um cliente da lista ou cadastre um novo.', 'error');
         return false;
       }
+      if (data.repeat) {
+        const results = await api.createSeries(body, data.repeat, data.count, seriesLabel(data.date, data.repeat));
+        const done = results.filter((r) => r.ok);
+        const failed = results.filter((r) => !r.ok);
+        onDone();
+        if (failed.length) seriesReport(done.length, failed);
+        else toast(`${done.length} atendimentos agendados.`);
+        if (contacts && done.length && !failed.length) setTimeout(() => notifyClient(done[0].appt, 'confirmado'), 50);
+        return true;
+      }
       const created = await api.createAppointment(body);
       toast('Atendimento agendado.');
       if (contacts) setTimeout(() => notifyClient(created, 'confirmado'), 50);
@@ -392,6 +423,20 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
   form.elements.date.addEventListener('change', loadSlots);
 
   if (!reschedule) {
+    const hint = form.querySelector('#repeat-hint');
+    const showRepeat = () => {
+      const freq = form.elements.repeat.value;
+      const date = form.elements.date.value;
+      form.querySelector('#count-wrap').hidden = !freq;
+      hint.hidden = !freq || !date;
+      if (hint.hidden) return;
+      const n = Math.min(52, Math.max(2, Number(form.elements.count.value) || 2));
+      const last = seriesDates(date, freq, n).at(-1);
+      const label = seriesLabel(date, freq);
+      hint.textContent = `${label[0].toUpperCase()}${label.slice(1)}, ${n} vezes: até ${fmtDay(last, { day: 'numeric', month: 'long', year: 'numeric' })}.`;
+    };
+    ['repeat', 'count', 'date'].forEach((f) => form.elements[f].addEventListener('input', showRepeat));
+    form.elements.date.addEventListener('change', showRepeat);
     form.elements.service_id.addEventListener('change', loadSlots);
     const pick = form.querySelector('#client-pick');
     const listEl = form.querySelector('#client-list');
@@ -449,6 +494,34 @@ async function appointmentForm(pid, appt, onDone, preset = {}) {
     }
   }
   loadSlots();
+}
+
+/** Resultado de uma série com datas que não deram certo (horário ocupado, fora da grade…). */
+function seriesReport(okCount, failed) {
+  modal({
+    title: okCount ? `${okCount} atendimentos agendados` : 'Nenhum atendimento agendado',
+    body: `<p>${failed.length === 1 ? 'Esta data ficou' : 'Estas datas ficaram'} de fora:</p>
+      <ul>${failed.map((r) => `<li><b>${esc(fmtDay(r.date, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>: ${esc(r.msg)}</li>`).join('')}</ul>
+      <p class="muted small">Agende essas datas separadamente (por exemplo, como encaixe ou em outro horário).</p>`,
+  });
+}
+
+/** Cancelar um atendimento de série: só este ou este e os próximos. Devolve 'one', 'series' ou null. */
+function cancelChoice(appt) {
+  return new Promise((resolve) => {
+    let answer = null;
+    const m = modal({
+      title: 'Cancelar atendimento',
+      body: `<p>Cancelar o atendimento de <b>${esc(appt.client_name)}</b> em ${esc(fmtDay(appt.starts_at))}?</p>
+        <p class="muted small">Faz parte de uma série${appt.series_label ? ` (${esc(appt.series_label)})` : ''}.</p>
+        <label class="check"><input type="radio" name="which" value="one" checked> Só este</label>
+        <label class="check"><input type="radio" name="which" value="series"> Este e os próximos da série</label>`,
+      submitLabel: 'Cancelar atendimento',
+      onSubmit: (form) => { answer = form.elements.which.value; return true; },
+    });
+    const observer = new MutationObserver(() => { if (!m.el.isConnected) { observer.disconnect(); resolve(answer); } });
+    observer.observe(document.body, { childList: true });
+  });
 }
 
 /** Novo agendamento já com o cliente escolhido (ref = "gid_uid" da participação no grupo). */
