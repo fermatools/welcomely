@@ -480,3 +480,9 @@ ul.plain { margin: 0; padding-left: 18px; }
 .day.off.active { opacity: 1; }
 .person.editable { cursor: pointer; }
 .person.editable:hover { border-color: var(--brand); }
+
+/* Agendamentos de um cliente (janela ao tocar no cliente no grupo) */
+.client-appts { list-style: none; margin: 0 0 12px; padding: 0; }
+.client-appt { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.client-appt small { display: block; }
+.client-appt.muted { opacity: .65; }
