@@ -1093,6 +1093,21 @@ export async function createAppointment(data) {
 }
 
 /**
+ * Agendamentos de um cliente do grupo com os atendentes cuja agenda eu gerencio (pids): pela participação no grupo
+ * (client_ref) e, se tiver conta, pela conta (client_id). Uma consulta de igualdade por atendente (regras simples).
+ */
+export async function clientAppointments(gid, uid, pids) {
+  const mine = pids.filter((pid) => isManager(pid));
+  const noAccount = uid.startsWith('c_');
+  const lists = await Promise.all(mine.flatMap((pid) => [
+    store.list('appointments', [['professional_id', '==', pid], ['client_ref', '==', `${gid}_${uid}`]]),
+    noAccount ? Promise.resolve([]) : store.list('appointments', [['professional_id', '==', pid], ['client_id', '==', uid]]),
+  ]));
+  const byId = new Map(lists.flat().map((a) => [a.id, a]));
+  return sortByStart([...byId.values()].map(apptOut));
+}
+
+/**
  * Agendamento periódico (atendente/auxiliar): cria um agendamento por data da série, com o mesmo cliente, serviço e
  * horário. Datas com o horário ocupado (ou fora da grade, sem encaixe) ficam de fora e voltam com o motivo.
  * Devolve [{ date, ok, appt?, msg? }].

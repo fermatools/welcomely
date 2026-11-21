@@ -1,7 +1,9 @@
 import * as api from '../api.js';
 import { phoneMatches } from '../data/logic.js';
 import { go, loadMe, saveRedirect, state } from '../state.js';
-import { busy, confirmDialog, empty, esc, formData, icon, modal, spinner, toast } from '../ui.js';
+import {
+  busy, confirmDialog, empty, esc, fmtDay, formData, icon, modal, nowStamp, spinner, statusBadge, timeOf, toast,
+} from '../ui.js';
 import { bookForClient } from './agenda.js';
 import { importDialog } from './importar.js';
 
@@ -178,11 +180,12 @@ function personMenu(g, person, onDone) {
   const pros = canBook(g, person) ? bookablePros(g) : [];
   const edit = canEdit(g, person);
   const ref = `${g.gid}_${person.uid}`;
-  if (!edit && pros.length === 1) { bookForClient(pros[0].uid, ref); return; }
   if (!pros.length) { editForm(g, person, onDone); return; }
   const m = modal({
     title: person.name,
-    body: `<div class="list">${pros.map((p) => `
+    body: `<h3 class="section-title">Agendamentos</h3>
+      <div id="client-appts">${spinner()}</div>
+      <div class="list">${pros.map((p) => `
         <button type="button" class="btn block primary" data-book="${esc(p.uid)}">${icon('calendar')} Agendar${pros.length > 1 ? ` com ${esc(p.name)}` : ''}</button>`).join('')}
       ${edit ? `<button type="button" class="btn block" id="edit-person">${icon('user')} Editar dados</button>` : ''}</div>`,
   });
@@ -190,7 +193,31 @@ function personMenu(g, person, onDone) {
     const b = e.target.closest('[data-book]');
     if (b) { m.close(); bookForClient(b.dataset.book, ref); return; }
     if (e.target.closest('#edit-person')) { m.close(); editForm(g, person, onDone); }
+    if (e.target.closest('#show-past')) { showPast = true; render(); }
   });
+
+  // Próximos atendimentos (e, a pedido, os anteriores) com os atendentes que eu gerencio neste grupo
+  const box = m.el.querySelector('#client-appts');
+  let appts = [];
+  let showPast = false;
+  const multi = pros.length > 1;
+  const row = (a) => `<li class="client-appt${a.status === 'cancelado' ? ' muted' : ''}">
+      <span><b>${esc(fmtDay(a.starts_at, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</b>
+        às ${timeOf(a.starts_at)} · ${esc(a.service_name)}${multi ? ` · ${esc(a.professional_name)}` : ''}
+        ${a.series_label ? `<small class="muted">↻ ${esc(a.series_label)}</small>` : ''}</span>
+      ${statusBadge(a.status)}</li>`;
+  const render = () => {
+    const now = nowStamp();
+    const next = appts.filter((a) => a.ends_at >= now && ['pendente', 'confirmado'].includes(a.status));
+    const past = appts.filter((a) => !next.includes(a)).reverse().slice(0, 20);
+    box.innerHTML = `${next.length ? `<ul class="client-appts">${next.map(row).join('')}</ul>`
+      : '<p class="muted small">Nenhum atendimento marcado.</p>'}
+      ${past.length && !showPast ? `<button type="button" class="btn small ghost" id="show-past">Ver anteriores (${past.length})</button>` : ''}
+      ${showPast && past.length ? `<p class="muted small">Anteriores e cancelados</p><ul class="client-appts">${past.map(row).join('')}</ul>` : ''}`;
+  };
+  api.clientAppointments(g.gid, person.uid, pros.map((p) => p.uid))
+    .then((list) => { appts = list; render(); })
+    .catch((err) => { box.innerHTML = `<p class="error-text">${esc(err.message)}</p>`; });
 }
 
 const accessSelect = (current = 'clientes') => `<select name="access">${Object.entries(api.AUX_ACCESS).map(([k, label]) => `
